@@ -19,6 +19,8 @@ jobs:
   # Decides whether the Go jobs need to run. A change that only touches the docs
   # site, Markdown or brand assets skips them; skipped jobs still satisfy the
   # required status checks on main, so docs-only pull requests can merge.
+  # The Go jobs skip only on an explicit go=false, so a failed detector runs
+  # everything rather than silently passing.
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
@@ -38,7 +40,9 @@ jobs:
             echo "go=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          changed="$(git diff --name-only "$BASE" "$GITHUB_SHA")"
+          # --no-renames lists both sides of a move, so moving code into docs/
+          # still counts as a code change.
+          changed="$(git diff --name-only --no-renames "$BASE" "$GITHUB_SHA")"
           echo "Changed files:"
           echo "$changed"
           docs_only='^(docs-site/|docs/|brand/|[^/]+\.md$|\.github/ISSUE_TEMPLATE/|\.github/pull_request_template\.md$)'
@@ -52,7 +56,7 @@ jobs:
   check:
     name: Format and vet
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +86,7 @@ jobs:
   unit-tests:
     name: Go unit and package tests
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -120,7 +124,7 @@ jobs:
   workflows:
     name: Lint workflows
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -145,7 +149,7 @@ jobs:
   build:
     name: Cross-compile
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -169,7 +173,7 @@ jobs:
   end-to-end:
     name: End to end against Terraform
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
