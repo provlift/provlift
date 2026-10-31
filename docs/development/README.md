@@ -26,7 +26,7 @@ go run ./cmd/provlift list -C path/to/terraform-repo
 |---|---|
 | Version classification and constraint rewriting | Table-driven unit tests, including 0.x and prerelease cases |
 | Repository discovery | Fixture repository under `internal/discovery/testdata` covering root vs child modules, legacy shorthand, missing versions and the `.terraform` cache |
-| File editing | Temporary fixtures asserting byte preservation, rollback, interrupted-write recovery, and stale-scan rejection |
+| File editing | Temporary fixtures asserting byte preservation, rollback, recovery of recorded interrupted writes, refusal of unrecorded backups, and stale-scan rejection |
 | Registry client | Local HTTP server exercising service discovery, version listing and auth headers |
 | Workflow scripts | Executable Bash steps with fake provlift/Terraform commands; matrix selection, major acknowledgement, branch reuse and vendoring order |
 

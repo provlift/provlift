@@ -266,6 +266,17 @@ depends on its parent directory's permissions, not the file's write bit.
 
 Also confirm no `.provlift-backup` or `.provlift-*.tmp` file survives a successful run.
 
+**Claim:** only backups provlift recorded are restored; any other backup stops
+the run before a file changes.
+
+```bash
+go test ./internal/hcledit -run '^TestRecover' -count=1
+```
+
+**Pass:** an interrupted replacement is restored, while a backup with no
+journal entry, or one that differs from it, fails with an error naming the
+file and leaves every file byte-for-byte unchanged.
+
 ---
 
 ## Claim group I — Credentials

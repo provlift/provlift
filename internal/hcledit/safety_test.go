@@ -11,8 +11,70 @@ import (
 	"github.com/provlift/provlift/internal/discovery"
 )
 
+// isolateJournal points the recovery journal at a temporary directory.
+func isolateJournal(t *testing.T) {
+	t.Helper()
+	cache := t.TempDir()
+	CacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { CacheDir = os.UserCacheDir })
+}
+
+// interruptReplace stops every replacement once the original has been moved
+// to its backup, as if the process died between the two renames. The
+// returned function lets later renames through again.
+func interruptReplace(t *testing.T) func() {
+	t.Helper()
+	renameFile = func(from, to string) error {
+		if strings.HasSuffix(to, ".provlift-backup") {
+			return os.Rename(from, to)
+		}
+		return errors.New("simulated interruption")
+	}
+	resume := func() { renameFile = os.Rename }
+	t.Cleanup(resume)
+	return resume
+}
+
+// interruptedWrite leaves path as an interrupted replacement would: the
+// original moved to its backup and recorded in the journal.
+func interruptedWrite(t *testing.T, path string) {
+	t.Helper()
+	resume := interruptReplace(t)
+	defer resume()
+	if err := writeFileAtomic(path, []byte("partially written")); err == nil {
+		t.Fatal("replacement was not interrupted")
+	}
+	if _, err := os.Stat(path + ".provlift-backup"); err != nil {
+		t.Fatalf("interrupted replacement left no backup: %v", err)
+	}
+}
+
+func assertNoJournal(t *testing.T) {
+	t.Helper()
+	cache, err := CacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(cache, "provlift", "recovery"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		t.Errorf("unexpected journal entry: %s", entry.Name())
+	}
+}
+
+func assertContent(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != want {
+		t.Errorf("%s = %q, error = %v; want %q", path, got, err, want)
+	}
+}
+
 func safetyFixture(t *testing.T) (string, []Edit) {
 	t.Helper()
+	isolateJournal(t)
 	dir := t.TempDir()
 	for _, name := range []string{"a.tf", "b.tf"} {
 		provider := "azurerm"
@@ -113,18 +175,17 @@ func TestApplyFailureAfterReplacementRecoversBackup(t *testing.T) {
 	}
 	_, err := applyWithWriter(edits, func(path string, content []byte) error {
 		if path == second {
-			if err := os.Rename(path, path+".provlift-backup"); err != nil {
+			resume := interruptReplace(t)
+			defer resume()
+			if err := writeFileAtomic(path, content); err != nil {
 				return err
 			}
-			if err := os.WriteFile(path, content, 0o600); err != nil {
-				return err
-			}
-			return errors.New("failed to remove backup after replacement")
+			return errors.New("replacement was not interrupted")
 		}
 		return writeFileAtomic(path, content)
 	})
 	if err == nil {
-		t.Fatal("expected an error after replacing the second file")
+		t.Fatal("expected an error after interrupting the second file")
 	}
 	for path, original := range originals {
 		got, err := os.ReadFile(path)
@@ -133,18 +194,13 @@ func TestApplyFailureAfterReplacementRecoversBackup(t *testing.T) {
 		}
 	}
 	assertNoArtifacts(t, dir)
+	assertNoJournal(t)
 }
 
 func TestApplyRecoversInterruptedBackupBeforeRendering(t *testing.T) {
 	dir, edits := safetyFixture(t)
 	path := filepath.Join(dir, "a.tf")
-	backup := path + ".provlift-backup"
-	if err := os.Rename(path, backup); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("partially written"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	interruptedWrite(t, path)
 	if _, err := Apply(edits); err != nil {
 		t.Fatalf("Apply should restore backup before rendering: %v", err)
 	}
@@ -153,6 +209,66 @@ func TestApplyRecoversInterruptedBackupBeforeRendering(t *testing.T) {
 		t.Fatalf("recovered file = %q, error = %v", got, err)
 	}
 	assertNoArtifacts(t, dir)
+	assertNoJournal(t)
+}
+
+func TestApplyRefusesUnrecordedBackup(t *testing.T) {
+	dir, edits := safetyFixture(t)
+	path := filepath.Join(dir, "a.tf")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".provlift-backup", []byte("unexpected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Apply(edits); err == nil || !strings.Contains(err.Error(), "no record of creating it") {
+		t.Fatalf("expected unrecorded backup refusal, got %v", err)
+	}
+	assertContent(t, path, string(original))
+	assertContent(t, path+".provlift-backup", "unexpected")
+}
+
+func TestReplaceFallbackClearsJournal(t *testing.T) {
+	isolateJournal(t)
+	path := filepath.Join(t.TempDir(), "main.tf")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Refuse only the first direct rename, forcing the backup path.
+	refused := false
+	renameFile = func(from, to string) error {
+		if !refused && to == path {
+			refused = true
+			return errors.New("destination in use")
+		}
+		return os.Rename(from, to)
+	}
+	t.Cleanup(func() { renameFile = os.Rename })
+	if err := writeFileAtomic(path, []byte("updated")); err != nil {
+		t.Fatal(err)
+	}
+	if !refused {
+		t.Fatal("backup path was not exercised")
+	}
+	assertContent(t, path, "updated")
+	assertNoArtifacts(t, filepath.Dir(path))
+	assertNoJournal(t)
+}
+
+func TestReplaceWithoutCacheDirKeepsOriginal(t *testing.T) {
+	CacheDir = func() (string, error) { return "", errors.New("no cache directory") }
+	t.Cleanup(func() { CacheDir = os.UserCacheDir })
+	path := filepath.Join(t.TempDir(), "main.tf")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	interruptReplace(t)
+	if err := writeFileAtomic(path, []byte("updated")); err == nil || !strings.Contains(err.Error(), "recording backup") {
+		t.Fatalf("expected the backup to be refused, got %v", err)
+	}
+	assertContent(t, path, "original")
+	assertNoArtifacts(t, filepath.Dir(path))
 }
 
 func TestApplyRejectsSymlinkBackup(t *testing.T) {
@@ -167,6 +283,7 @@ func TestApplyRejectsSymlinkBackup(t *testing.T) {
 }
 
 func TestRecoverSkipsGeneratedDirectories(t *testing.T) {
+	isolateJournal(t)
 	dir := t.TempDir()
 	excluded := []string{".git", ".terraform", ".terragrunt", ".idea", ".vscode", "node_modules", ".backup", "custom", filepath.Join("envs", "dev", "ignored")}
 	for _, name := range excluded {
@@ -183,10 +300,11 @@ func TestRecoverSkipsGeneratedDirectories(t *testing.T) {
 	if err := os.Mkdir(module, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	backup := filepath.Join(module, "main.tf.provlift-backup")
-	if err := os.WriteFile(backup, []byte("original"), 0o600); err != nil {
+	path := filepath.Join(module, "main.tf")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	interruptedWrite(t, path)
 	if err := Recover(dir, []string{".backup/**", "custom", "**/ignored/**"}); err != nil {
 		t.Fatal(err)
 	}
@@ -194,12 +312,116 @@ func TestRecoverSkipsGeneratedDirectories(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, name, "main.tf.provlift-backup")); err != nil {
 			t.Errorf("backup inside %s should be untouched: %v", name, err)
 		}
+		if _, err := os.Stat(filepath.Join(dir, name, "main.tf")); !os.IsNotExist(err) {
+			t.Errorf("backup inside %s should not be restored: %v", name, err)
+		}
 	}
-	if got, err := os.ReadFile(filepath.Join(module, "main.tf")); err != nil || string(got) != "original" {
-		t.Errorf("module recovery = %q, error = %v", got, err)
-	}
-	if _, err := os.Stat(backup); !os.IsNotExist(err) {
+	assertContent(t, path, "original")
+	if _, err := os.Stat(path + ".provlift-backup"); !os.IsNotExist(err) {
 		t.Errorf("restored module backup should be removed: %v", err)
+	}
+	assertNoJournal(t)
+}
+
+func TestRecoverRefusesUnrecordedBackup(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		target bool
+	}{
+		{"with target", true},
+		{"without target", false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			isolateJournal(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, "main.tf")
+			backup := path + ".provlift-backup"
+			if err := os.WriteFile(backup, []byte("unexpected"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if scenario.target {
+				if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := Recover(dir, nil)
+			if err == nil || !strings.Contains(err.Error(), backup) || !strings.Contains(err.Error(), "delete it if it is unexpected") {
+				t.Fatalf("expected refusal naming %s, got %v", backup, err)
+			}
+			assertContent(t, backup, "unexpected")
+			if scenario.target {
+				assertContent(t, path, "original")
+			} else if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Errorf("target should not be created: %v", err)
+			}
+		})
+	}
+}
+
+func TestRecoverRefusesBackupThatDiffersFromJournal(t *testing.T) {
+	isolateJournal(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.tf")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	interruptedWrite(t, path)
+	if err := os.WriteFile(path+".provlift-backup", []byte("altered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Recover(dir, nil); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("expected mismatch refusal, got %v", err)
+	}
+	assertContent(t, path+".provlift-backup", "altered")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("target should not be restored: %v", err)
+	}
+}
+
+func TestRecoverChecksEveryBackupBeforeRestoring(t *testing.T) {
+	isolateJournal(t)
+	dir := t.TempDir()
+	recorded := filepath.Join(dir, "a", "main.tf")
+	unexpected := filepath.Join(dir, "b", "main.tf.provlift-backup")
+	for _, path := range []string{recorded, unexpected} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	interruptedWrite(t, recorded)
+	if err := Recover(dir, nil); err == nil || !strings.Contains(err.Error(), unexpected) {
+		t.Fatalf("expected refusal naming %s, got %v", unexpected, err)
+	}
+	if _, err := os.Stat(recorded); !os.IsNotExist(err) {
+		t.Fatalf("no backup should be restored while another is refused: %v", err)
+	}
+	if err := os.Remove(unexpected); err != nil {
+		t.Fatal(err)
+	}
+	if err := Recover(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertContent(t, recorded, "original")
+	assertNoJournal(t)
+}
+
+func TestRecoverWithoutCacheDirRestoresNothing(t *testing.T) {
+	CacheDir = func() (string, error) { return "", errors.New("no cache directory") }
+	t.Cleanup(func() { CacheDir = os.UserCacheDir })
+	dir := t.TempDir()
+	backup := filepath.Join(dir, "main.tf.provlift-backup")
+	if err := os.WriteFile(backup, []byte("unexpected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Recover(dir, nil); err == nil || !strings.Contains(err.Error(), "recovery journal unavailable") {
+		t.Fatalf("expected refusal without a journal, got %v", err)
+	}
+	assertContent(t, backup, "unexpected")
+	if _, err := os.Stat(filepath.Join(dir, "main.tf")); !os.IsNotExist(err) {
+		t.Errorf("target should not be created: %v", err)
 	}
 }
 
@@ -251,5 +473,76 @@ func assertNoArtifacts(t *testing.T, dir string) {
 		if strings.HasSuffix(entry.Name(), ".provlift-backup") || strings.HasPrefix(entry.Name(), ".provlift-") {
 			t.Errorf("unexpected write artifact: %s", entry.Name())
 		}
+	}
+}
+
+func TestCompletedReplacementForgetsStaleRecord(t *testing.T) {
+	// A run that died after recording a backup but before moving the original
+	// aside leaves a record and no backup. The next completed write must drop
+	// that record, so a backup holding the old bytes is not trusted later.
+	isolateJournal(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "main.tf")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recordBackup(path, []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(path, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	assertNoJournal(t)
+
+	if err := os.WriteFile(path+".provlift-backup", []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Recover(root, nil); err == nil {
+		t.Fatal("restored a backup whose record should have been forgotten")
+	}
+	assertContent(t, path, "new")
+}
+
+func TestRecoverRefusesJournalInsideTree(t *testing.T) {
+	// A journal inside the tree being edited could have been supplied by it.
+	root := t.TempDir()
+	cache := filepath.Join(root, ".cache")
+	CacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { CacheDir = os.UserCacheDir })
+
+	path := filepath.Join(root, "main.tf")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	interruptedWrite(t, path)
+
+	err := Recover(root, nil)
+	if err == nil || !strings.Contains(err.Error(), "recovery journal") {
+		t.Fatalf("Recover() error = %v, want refusal naming the recovery journal", err)
+	}
+	if _, err := os.Stat(path + ".provlift-backup"); err != nil {
+		t.Errorf("backup should be left in place: %v", err)
+	}
+}
+
+func TestRecoverRefusesBackupNamedDirectory(t *testing.T) {
+	// A directory with a backup's name must stop recovery before any recorded
+	// backup elsewhere is restored.
+	isolateJournal(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "a.tf")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	interruptedWrite(t, path)
+	if err := os.Mkdir(filepath.Join(root, "b.tf.provlift-backup"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Recover(root, nil); err == nil || !strings.Contains(err.Error(), "b.tf.provlift-backup") {
+		t.Fatalf("Recover() error = %v, want refusal naming the directory", err)
+	}
+	if _, err := os.Stat(path + ".provlift-backup"); err != nil {
+		t.Errorf("recorded backup should not have been restored yet: %v", err)
 	}
 }

@@ -116,6 +116,17 @@
   Cosmetic differences such as `>=4.16.0` versus `>= 4.16.0` are normalised
   away and never reported.
 
+### 12.15 `recovering interrupted writes: refusing to restore <file>.tf.provlift-backup`
+
+- **Cause** — `upgrade` found a `.tf.provlift-backup` file that provlift has
+  no record of creating, or one whose content no longer matches what it
+  recorded. provlift records each backup it makes in the user cache directory
+  and restores only those, so an interrupted write is resumed only on the
+  machine and account that made it. Nothing is changed when this error occurs.
+- **Fix** — Inspect the named file. If it is unexpected, delete it and re-run.
+  If it holds content you need, copy it over the `.tf` file by hand first.
+  A backup inside an excluded directory is ignored.
+
 ---
 
 ---
