@@ -437,10 +437,10 @@ func RaiseConstraintFloor(existing string, target *version.Version) (Rewrite, er
 		res.Reason = "supported minimum raised to the target version"
 
 	case ShapePessimistic:
-		if terms[0].segments == 1 && segments(terms[0].version)[0] == segments(target)[0] {
+		if seg := segments(target); terms[0].segments == 1 && (seg[1] != 0 || seg[2] != 0) {
 			// "~> 6" admits all of 6.x, but its one segment can only name a
-			// whole major version as the floor.
-			seg := segments(target)
+			// whole major version as the floor: "~> 7" for 7.1.0 would still
+			// admit 7.0.0, below the requested minimum.
 			res.Reason = fmt.Sprintf(
 				"%q can only declare a whole major version as its floor, not %s; use an explicit range such as %q",
 				existing, target, fmt.Sprintf(">= %s, < %d.0.0", target, seg[0]+1))
@@ -474,7 +474,7 @@ func RaiseConstraintFloor(existing string, target *version.Version) (Rewrite, er
 
 	res.Changed = res.New != res.Old
 	if !res.Changed {
-		if shape == ShapePessimistic {
+		if shape == ShapePessimistic && terms[0].segments != 1 {
 			seg := segments(target)
 			// "~> 1.2" admits all of 1.x. Rewriting it to "~> 1.2.34" would
 			// also drop the ceiling to < 1.3.0, which is a different promise.

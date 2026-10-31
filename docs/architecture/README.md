@@ -116,9 +116,11 @@ Constraints intersect across the whole module tree. A ceiling inside a consumed
 module binds this repository even though nothing here declares it. Reported as
 `BLOCKED = dep`, with the imposing modules named.
 
-**This requires the module tree to be on disk.** On a fresh checkout the ceiling
-is still respected but is misattributed to the local constraint (`BLOCKED = yes`)
-because nothing has been vendored. Run `terraform get` first to get accurate
+**Naming the module requires the module tree to be on disk.** On a fresh
+checkout nothing has been vendored, so provlift falls back to the constraints
+Terraform recorded in `.terraform.lock.hcl`: the ceiling is still reported as
+`BLOCKED = dep`, but without the module that imposes it. Without a lock file the
+ceiling is not visible at all. Run `terraform get` first to get full
 attribution. This is why `examples/workflows/provider-compatibility.yml` vendors
 before checking.
 
