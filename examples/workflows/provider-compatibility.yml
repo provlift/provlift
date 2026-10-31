@@ -70,7 +70,7 @@ permissions:
   pull-requests: write
 
 env:
-  PROVLIFT_VERSION: ${{ vars.PROVLIFT_VERSION || 'v0.1.0' }} # x-release-please-version
+  PROVLIFT_VERSION: ${{ vars.PROVLIFT_VERSION || 'v0.1.1' }} # x-release-please-version
   GO_VERSION: "1.26"
   # Free-form, so it reaches the shell only through the environment and is
   # validated before use.

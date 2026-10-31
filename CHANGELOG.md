@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/provlift/provlift/compare/v0.1.0...v0.1.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **hcledit:** only recover backups provlift recorded ([#58](https://github.com/provlift/provlift/issues/58)) ([93c1e49](https://github.com/provlift/provlift/commit/93c1e49ba70c260410b8cd05e689c30791707ffc))
+* **upgrade:** read constraints the way Terraform does ([#59](https://github.com/provlift/provlift/issues/59)) ([91ac92b](https://github.com/provlift/provlift/commit/91ac92b88f91ce2857ff67bbd260f2f77cb63807))
+
 ## 0.1.0 (2026-10-31)
 
 First public release.
