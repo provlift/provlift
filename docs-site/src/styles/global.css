@@ -1,7 +1,8 @@
 @import "tailwindcss";
 
 /* Brand tokens, taken from brand/svg. Dark is the primary theme; light follows
-   the system preference and uses the darker green that passes contrast on white. */
+   the system preference. Text colours meet WCAG AA (4.5:1) on every surface;
+   --brand-green is the exact logo colour and is used only for the mark. */
 :root {
   --bg: #0e1116;
   --bg-raised: #151a21;
@@ -11,8 +12,9 @@
   --line-strong: #323b47;
   --fg: #edeff3;
   --muted: #9aa3b2;
-  --faint: #6b7483;
+  --faint: #8a93a2;
   --accent: #2bb673;
+  --brand-green: #2bb673;
   --accent-ink: #0e1116;
   --accent-soft: rgba(43, 182, 115, .12);
   --accent-line: rgba(43, 182, 115, .35);
@@ -38,12 +40,13 @@
     --line-strong: #cdd2da;
     --fg: #0e1116;
     --muted: #4f5866;
-    --faint: #7a8392;
-    --accent: #1e8a56;
+    --faint: #5f6876;
+    --accent: #167347;
+    --brand-green: #1e8a56;
     --accent-ink: #ffffff;
     --accent-soft: rgba(30, 138, 86, .1);
     --accent-line: rgba(30, 138, 86, .35);
-    --warn: #b4600f;
+    --warn: #9a520d;
     --code-bg: #0e1116;
     --code-fg: #d7dce4;
     --shadow: 0 14px 30px rgba(14, 17, 22, .08);
@@ -63,7 +66,7 @@ a { color: inherit; }
 .logo { flex: none; display: block; color: var(--fg); }
 .logo .bar-low { fill: currentColor; opacity: .35; }
 .logo .bar-high { fill: currentColor; opacity: .75; }
-.logo .chevron { fill: none; stroke: var(--accent); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+.logo .chevron { fill: none; stroke: var(--brand-green); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
 
 .shell { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
 
@@ -117,7 +120,7 @@ a { color: inherit; }
 .terminal-bar i { width: 10px; height: 10px; border-radius: 50%; background: #2a313b; }
 .terminal pre { margin: 0; padding: 20px 22px 24px; overflow-x: auto; color: var(--code-fg); font: 14px/1.9 var(--mono); }
 .terminal .prompt, .terminal .up { color: #2bb673; }
-.terminal .dim { color: #6b7483; }
+.terminal .dim { color: #8a93a2; }
 
 .providers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 30px; }
 .providers span { padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font: 12px var(--mono); }

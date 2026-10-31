@@ -132,7 +132,7 @@ const flags = [
           <div class="section-heading">
             <div class="eyebrow">01 · Commands</div>
             <h2>Find the right command</h2>
-            <p class="section-intro">Read-only by default. Only <code>upgrade</code> writes files, and only after showing you the plan.</p>
+            <p class="section-intro"><code>list</code>, <code>check</code>, <code>drift</code> and <code>version</code> never change files. <code>validate</code> runs Terraform init, and <code>upgrade</code> edits constraints, so preview upgrades with <code>--dry-run</code> first.</p>
           </div>
           <div class="command-grid" id="command-grid">
             {commands.map((command) => (
