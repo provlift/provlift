@@ -20,4 +20,8 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          # The built-in token works, but releases and pull requests it creates do
+          # not trigger other workflows. Set RELEASE_PLEASE_TOKEN (a fine-grained
+          # token with contents and pull-request write access) so a release tag
+          # starts the Release workflow and release PRs run CI.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
