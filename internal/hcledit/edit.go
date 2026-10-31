@@ -59,6 +59,9 @@ func Recover(root string, excludes []string) error {
 			if path != root && discovery.ShouldSkipDir(root, path, excludes) {
 				return filepath.SkipDir
 			}
+			if strings.HasSuffix(entry.Name(), ".tf.provlift-backup") {
+				return fmt.Errorf("refusing non-regular backup %s", path)
+			}
 			return nil
 		}
 		if !strings.HasSuffix(entry.Name(), ".tf.provlift-backup") {
@@ -75,6 +78,15 @@ func Recover(root string, excludes []string) error {
 	})
 	if err != nil {
 		return err
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+
+	// A journal inside the tree being edited could be supplied by that tree,
+	// so it cannot vouch for anything there.
+	if dir, ok := journalDirInside(root); ok {
+		return fmt.Errorf("refusing to restore backups under %s: the recovery journal %s is inside it; inspect the backups and delete any that are unexpected", root, dir)
 	}
 
 	// Check every backup before restoring any, so an unexpected one leaves
@@ -364,6 +376,7 @@ func recoverBackup(path string) error {
 
 func replaceFile(tmpName, path string) error {
 	if err := renameFile(tmpName, path); err == nil {
+		forgetBackup(path)
 		return nil
 	}
 	original, err := os.ReadFile(path)
@@ -419,6 +432,44 @@ func journalEntry(path string) (string, string, error) {
 	}
 	sum := sha256.Sum256([]byte(target))
 	return filepath.Join(cache, "provlift", "recovery", hex.EncodeToString(sum[:])+".json"), target, nil
+}
+
+// forgetBackup drops any journal entry for path. Once a replacement has
+// completed, an older entry (for example one left by a run that died before
+// moving the original aside) describes content that is gone and must never
+// vouch for a backup again.
+func forgetBackup(path string) {
+	if entry, _, err := journalEntry(path); err == nil {
+		_ = os.Remove(entry)
+	}
+}
+
+// journalDirInside reports whether the recovery journal resolves to a
+// directory inside root, and returns that directory.
+func journalDirInside(root string) (string, bool) {
+	cache, err := CacheDir()
+	if err != nil {
+		return "", false
+	}
+	dir := filepath.Join(resolvedPath(cache), "provlift", "recovery")
+	rel, err := filepath.Rel(resolvedPath(root), dir)
+	if err != nil {
+		return "", false
+	}
+	return dir, rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// resolvedPath returns path made absolute, with symlinks resolved where the
+// path exists.
+func resolvedPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	return abs
 }
 
 func recordBackup(path string, content []byte) (string, error) {

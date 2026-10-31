@@ -475,3 +475,74 @@ func assertNoArtifacts(t *testing.T, dir string) {
 		}
 	}
 }
+
+func TestCompletedReplacementForgetsStaleRecord(t *testing.T) {
+	// A run that died after recording a backup but before moving the original
+	// aside leaves a record and no backup. The next completed write must drop
+	// that record, so a backup holding the old bytes is not trusted later.
+	isolateJournal(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "main.tf")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recordBackup(path, []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(path, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	assertNoJournal(t)
+
+	if err := os.WriteFile(path+".provlift-backup", []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Recover(root, nil); err == nil {
+		t.Fatal("restored a backup whose record should have been forgotten")
+	}
+	assertContent(t, path, "new")
+}
+
+func TestRecoverRefusesJournalInsideTree(t *testing.T) {
+	// A journal inside the tree being edited could have been supplied by it.
+	root := t.TempDir()
+	cache := filepath.Join(root, ".cache")
+	CacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { CacheDir = os.UserCacheDir })
+
+	path := filepath.Join(root, "main.tf")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	interruptedWrite(t, path)
+
+	err := Recover(root, nil)
+	if err == nil || !strings.Contains(err.Error(), "recovery journal") {
+		t.Fatalf("Recover() error = %v, want refusal naming the recovery journal", err)
+	}
+	if _, err := os.Stat(path + ".provlift-backup"); err != nil {
+		t.Errorf("backup should be left in place: %v", err)
+	}
+}
+
+func TestRecoverRefusesBackupNamedDirectory(t *testing.T) {
+	// A directory with a backup's name must stop recovery before any recorded
+	// backup elsewhere is restored.
+	isolateJournal(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "a.tf")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	interruptedWrite(t, path)
+	if err := os.Mkdir(filepath.Join(root, "b.tf.provlift-backup"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Recover(root, nil); err == nil || !strings.Contains(err.Error(), "b.tf.provlift-backup") {
+		t.Fatalf("Recover() error = %v, want refusal naming the directory", err)
+	}
+	if _, err := os.Stat(path + ".provlift-backup"); err != nil {
+		t.Errorf("recorded backup should not have been restored yet: %v", err)
+	}
+}
