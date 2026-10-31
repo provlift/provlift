@@ -200,6 +200,64 @@ func TestCosmeticConstraintDifferencesAreNotDivergence(t *testing.T) {
 	}
 }
 
+func TestEquivalentConstraintSpellingsAreNotDivergence(t *testing.T) {
+	// Each pair is spelled differently but read identically by Terraform.
+	tests := []struct {
+		name string
+		a, b string
+	}{
+		{"bare and explicit pin", "6.0.1", "= 6.0.1"},
+		{"short and padded version", ">= 4.16", ">= 4.16.0"},
+		{"terms in another order", ">= 4, < 5", "< 5, >= 4"},
+		{"one-segment pessimistic", "~> 1", "~> 1.0"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := inventory(t,
+				moduleSpec{relDir: "a", isRoot: true,
+					constraints: map[string]string{"hashicorp/azurerm": tc.a}},
+				moduleSpec{relDir: "b", isRoot: true,
+					constraints: map[string]string{"hashicorp/azurerm": tc.b}},
+			)
+
+			if got := Analyze(inv, Options{}).Divergence; len(got) != 0 {
+				t.Errorf("Divergence = %+v, want none", got)
+			}
+		})
+	}
+}
+
+func TestDivergenceShowsConstraintsAsWritten(t *testing.T) {
+	// Grouping is by meaning, but the report shows what the author wrote
+	// rather than the padded form used for comparison.
+	inv := inventory(t,
+		moduleSpec{relDir: "a", isRoot: true,
+			constraints: map[string]string{"hashicorp/azurerm": ">= 4, < 5"}},
+		moduleSpec{relDir: "b", isRoot: true,
+			constraints: map[string]string{"hashicorp/azurerm": "< 5, >= 4"}},
+		moduleSpec{relDir: "c", isRoot: true,
+			constraints: map[string]string{"hashicorp/azurerm": "~> 4.65"}},
+	)
+
+	report := Analyze(inv, Options{})
+	if len(report.Divergence) != 1 {
+		t.Fatalf("got %d divergence findings, want 1", len(report.Divergence))
+	}
+	uses := report.Divergence[0].Uses
+	if len(uses) != 2 {
+		t.Fatalf("got %d distinct constraints, want 2: %+v", len(uses), uses)
+	}
+	for _, use := range uses {
+		if use.Constraint != ">= 4, < 5" && use.Constraint != "~> 4.65" {
+			t.Errorf("Constraint = %q, want the text a module declared", use.Constraint)
+		}
+		if use.Constraint == ">= 4, < 5" && len(use.Modules) != 2 {
+			t.Errorf("Modules = %v, want both modules declaring the range", use.Modules)
+		}
+	}
+}
+
 func TestMissingConstraintIsReportedAsDivergence(t *testing.T) {
 	inv := inventory(t,
 		moduleSpec{relDir: "a", isRoot: true,
@@ -298,10 +356,14 @@ func TestNormalizeConstraint(t *testing.T) {
 	}{
 		{">=4.16.0", ">= 4.16.0"},
 		{">= 4.16.0", ">= 4.16.0"},
+		{">= 4.16", ">= 4.16.0"},
 		{"  ~>1.2.31  ", "~> 1.2.31"},
+		{"~> 1.2", "~> 1.2"},
+		{"~> 1", "~> 1.0"},
 		{">=3.47.0,<4.0.0", ">= 3.47.0, < 4.0.0"},
 		{">= 3.47.0, < 4.0.0", ">= 3.47.0, < 4.0.0"},
-		{"3.4.0", "3.4.0"},
+		{"< 4.0, >= 3.47", ">= 3.47.0, < 4.0.0"},
+		{"3.4.0", "= 3.4.0"},
 		{"", ""},
 	}
 
@@ -309,6 +371,34 @@ func TestNormalizeConstraint(t *testing.T) {
 		t.Run(tc.in, func(t *testing.T) {
 			if got := NormalizeConstraint(tc.in); got != tc.want {
 				t.Errorf("NormalizeConstraint(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeConstraintComparesMeaning(t *testing.T) {
+	tests := []struct {
+		a, b string
+		same bool
+	}{
+		{"6.0.1", "= 6.0.1", true},
+		{">= 4.16", ">= 4.16.0", true},
+		{">= 4, < 5", "< 5, >= 4", true},
+		{"~> 1", "~> 1.0", true},
+		{"= 5.0.0-beta.1", "5.0.0-beta.1", true},
+		// "~> 1.2" admits 1.9.0; "~> 1.2.0" does not.
+		{"~> 1.2", "~> 1.2.0", false},
+		{">= 4.16", "> 4.16", false},
+		{"6.0.1", "6.0.2", false},
+		{">= 4, < 5", ">= 4", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.a+" vs "+tc.b, func(t *testing.T) {
+			a, b := NormalizeConstraint(tc.a), NormalizeConstraint(tc.b)
+			if (a == b) != tc.same {
+				t.Errorf("NormalizeConstraint(%q) = %q, NormalizeConstraint(%q) = %q, want same=%t",
+					tc.a, a, tc.b, b, tc.same)
 			}
 		})
 	}

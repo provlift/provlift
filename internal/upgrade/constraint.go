@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -529,8 +530,9 @@ func maxInt(a, b int) int {
 // it, and as a key that is identical for every spelling Terraform reads the
 // same way.
 type normalTerm struct {
-	text string
-	key  string
+	text    string
+	key     string
+	version *version.Version
 }
 
 // normalizeTerms splits a constraint into its terms. The key compares terms by
@@ -557,6 +559,7 @@ func normalizeTerms(constraint string) []normalTerm {
 		literal := strings.TrimSpace(m[2])
 		t := normalTerm{text: op + " " + literal, key: op + " " + literal}
 		if v, err := version.NewVersion(literal); err == nil {
+			t.version = v
 			t.key = op + " " + canonicalOperand(op, v, countSegments(literal))
 		}
 		out = append(out, t)
@@ -588,6 +591,36 @@ func canonicalOperand(op string, v *version.Version, segs int) string {
 // operand: it treats "~> 1" as "~> 1.0".
 func pessimisticPrecision(segs int) int {
 	return maxInt(segs, 2)
+}
+
+// CanonicalConstraint renders a constraint so that constraints Terraform reads
+// the same way render identically, whatever their spelling or term order:
+// "6.0.1" and "= 6.0.1", or ">= 4, < 5" and "< 5.0.0, >= 4.0.0". It is for
+// comparison, not display.
+func CanonicalConstraint(constraint string) string {
+	terms := normalizeTerms(constraint)
+	sort.SliceStable(terms, func(i, j int) bool {
+		a, b := terms[i].version, terms[j].version
+		switch {
+		case a != nil && b != nil && !a.Equal(b):
+			return a.LessThan(b)
+		case (a == nil) != (b == nil):
+			// Anything that is not a version sorts last.
+			return a != nil
+		default:
+			return terms[i].key < terms[j].key
+		}
+	})
+
+	seen := map[string]bool{}
+	out := make([]string, 0, len(terms))
+	for _, t := range terms {
+		if !seen[t.key] {
+			seen[t.key] = true
+			out = append(out, t.key)
+		}
+	}
+	return strings.Join(out, ", ")
 }
 
 // ExternalConstraint returns the terms present in merged but not declared

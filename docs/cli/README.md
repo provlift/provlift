@@ -180,8 +180,9 @@ hashicorp/google  5.44.0 .. 6.12.0  MAJOR  3
 `SPAN` classifies the distance between the oldest and newest locked version, so
 a split across a major boundary stands out from routine patch drift.
 
-Constraint divergence ignores cosmetic differences: `>=4.16.0` and `>= 4.16.0`
-are treated as the same constraint.
+Constraint divergence ignores differences Terraform does not see: `>=4.16` and
+`>= 4.16.0`, `6.0.1` and `= 6.0.1`, or `>= 4, < 5` and `< 5, >= 4` are treated
+as the same constraint. Each is shown as one of the modules wrote it.
 
 **Examples**
 
