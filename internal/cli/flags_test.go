@@ -159,6 +159,27 @@ func TestCheckModuleAndLevelFlags(t *testing.T) {
 	})
 }
 
+func TestModuleMatchesUsesSlashSeparatedGlobs(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		rel     string
+		filters []string
+		want    bool
+	}{
+		{"single path segment", "envs/prod", []string{"envs/*"}, true},
+		{"single star does not cross slash", "envs/prod/network", []string{"envs/*"}, false},
+		{"double star crosses slash", "envs/prod/network", []string{"envs/**"}, true},
+		{"normalizes dot and trailing slash", "envs/prod", []string{"./envs/prod/"}, true},
+		{"bare directory matches descendants", "envs/prod/network", []string{"envs/prod"}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := moduleMatches(test.rel, test.filters); got != test.want {
+				t.Fatalf("moduleMatches(%q, %q) = %t, want %t", test.rel, test.filters, got, test.want)
+			}
+		})
+	}
+}
+
 func TestUpgradeExactLevelFlag(t *testing.T) {
 	for _, scenario := range []struct {
 		exact bool
