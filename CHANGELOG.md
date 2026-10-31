@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/provlift/provlift/compare/v0.1.1...v0.1.2) (2026-10-31)
+
+
+### Bug Fixes
+
+* **upgrade:** reject unpublished explicit versions ([#64](https://github.com/provlift/provlift/issues/64)) ([e535322](https://github.com/provlift/provlift/commit/e535322781edc27ab27b80486384a40bb8312f9f))
+
 ## [0.1.1](https://github.com/provlift/provlift/compare/v0.1.0...v0.1.1) (2026-10-31)
 
 
