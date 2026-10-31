@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/provlift/provlift/internal/config"
+	"github.com/provlift/provlift/internal/hcledit"
 	"github.com/provlift/provlift/internal/registry"
 )
 
@@ -121,6 +122,11 @@ type harness struct {
 
 func newHarness(t *testing.T, extraFiles map[string]string) *harness {
 	t.Helper()
+
+	// Keep the recovery journal out of the real user cache.
+	cache := t.TempDir()
+	hcledit.CacheDir = func() (string, error) { return cache, nil }
+	t.Cleanup(func() { hcledit.CacheDir = os.UserCacheDir })
 
 	dir := t.TempDir()
 	files := map[string]string{
@@ -658,24 +664,44 @@ func TestUpgradeRewritesBlockingConstraint(t *testing.T) {
 	}
 }
 
-func TestUpgradeRecoversBackupBeforeScanningPartialFile(t *testing.T) {
-	h := newHarness(t, nil)
-	path := filepath.Join(h.dir, "main.tf")
-	if err := os.Rename(path, path+".provlift-backup"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("terraform {"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.run(t, newUpgradeCommand(h.opts),
-		"--provider", "azurerm", "--level", "major", "--exact-level", "--allow-major", "--skip-init"); err != nil {
-		t.Fatalf("upgrade after interrupted write: %v", err)
-	}
-	if _, err := os.Stat(path + ".provlift-backup"); !os.IsNotExist(err) {
-		t.Fatalf("backup should be removed after recovery: %v", err)
-	}
-	if !strings.Contains(h.mainTF(t), `version = "~> 5.0"`) {
-		t.Fatal("upgrade did not use recovered source")
+func TestUpgradeRefusesUnrecordedBackup(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		target string
+	}{
+		{"existing target", "main.tf"},
+		{"missing target", "modules/extra/versions.tf"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			backup := scenario.target + ".provlift-backup"
+			h := newHarness(t, map[string]string{backup: "terraform {}\n"})
+			before := map[string][]byte{}
+			for _, name := range []string{"main.tf", backup} {
+				content, err := os.ReadFile(filepath.Join(h.dir, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				before[name] = content
+			}
+
+			err := h.run(t, newUpgradeCommand(h.opts),
+				"--provider", "azurerm", "--level", "major", "--exact-level", "--allow-major", "--skip-init")
+			if err == nil || !strings.Contains(err.Error(), filepath.Join(h.dir, backup)) ||
+				!strings.Contains(err.Error(), "delete it if it is unexpected") {
+				t.Fatalf("expected a refusal naming %s, got %v", backup, err)
+			}
+			for name, content := range before {
+				got, err := os.ReadFile(filepath.Join(h.dir, name))
+				if err != nil || !bytes.Equal(got, content) {
+					t.Errorf("%s changed: %q, error = %v", name, got, err)
+				}
+			}
+			if scenario.target != "main.tf" {
+				if _, err := os.Stat(filepath.Join(h.dir, scenario.target)); !os.IsNotExist(err) {
+					t.Errorf("%s should not be created: %v", scenario.target, err)
+				}
+			}
+		})
 	}
 }
 

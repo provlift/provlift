@@ -8,6 +8,8 @@ package hcledit
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -37,9 +39,19 @@ func Apply(edits []Edit) ([]Result, error) {
 	return applyWithWriter(edits, writeFileAtomic)
 }
 
+// CacheDir returns the per-user cache directory that holds the recovery
+// journal. Tests point it at a temporary directory.
+var CacheDir = os.UserCacheDir
+
+// renameFile is os.Rename, replaced in tests to interrupt a replacement.
+var renameFile = os.Rename
+
 // Recover restores interrupted atomic replacements before a write-mode scan.
+// Only backups recorded in the recovery journal are restored; any other
+// backup stops the run before a file is touched.
 func Recover(root string, excludes []string) error {
-	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+	var targets []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -55,8 +67,33 @@ func Recover(root string, excludes []string) error {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("refusing symlink backup %s", path)
 		}
-		return recoverBackup(strings.TrimSuffix(path, ".provlift-backup"))
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("refusing non-regular backup %s", path)
+		}
+		targets = append(targets, strings.TrimSuffix(path, ".provlift-backup"))
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Check every backup before restoring any, so an unexpected one leaves
+	// the whole tree as it was.
+	var failures []error
+	for _, path := range targets {
+		if _, err := verifyBackup(path); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	if err := errors.Join(failures...); err != nil {
+		return err
+	}
+	for _, path := range targets {
+		if err := recoverBackup(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func applyWithWriter(edits []Edit, write func(string, []byte) error) ([]Result, error) {
@@ -307,6 +344,10 @@ func recoverBackup(path string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("refusing non-regular backup %s", backup)
 	}
+	entry, err := verifyBackup(path)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(path); err == nil {
 		if err := os.Remove(path); err != nil {
 			return err
@@ -314,20 +355,139 @@ func recoverBackup(path string) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	return os.Rename(backup, path)
+	if err := os.Rename(backup, path); err != nil {
+		return err
+	}
+	_ = os.Remove(entry)
+	return nil
 }
 
 func replaceFile(tmpName, path string) error {
-	if err := os.Rename(tmpName, path); err == nil {
+	if err := renameFile(tmpName, path); err == nil {
 		return nil
 	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	// Record the backup outside the repository before creating it, so
+	// recovery can tell it apart from any other file of the same name.
+	entry, err := recordBackup(path, original)
+	if err != nil {
+		return fmt.Errorf("recording backup: %w", err)
+	}
 	backup := path + ".provlift-backup"
-	if err := os.Rename(path, backup); err != nil {
+	if err := renameFile(path, backup); err != nil {
+		_ = os.Remove(entry)
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Rename(backup, path)
+	if err := renameFile(tmpName, path); err != nil {
+		if renameFile(backup, path) == nil {
+			_ = os.Remove(entry)
+		}
 		return err
 	}
-	return os.Remove(backup)
+	if err := os.Remove(backup); err != nil {
+		return err
+	}
+	_ = os.Remove(entry)
+	return nil
+}
+
+// journalRecord is a recovery journal entry: the file being replaced and the
+// SHA-256 of the backup provlift made of it.
+type journalRecord struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+// journalEntry returns the journal file for path and the canonical path it
+// records. Entries live in the user cache, never in the repository.
+func journalEntry(path string) (string, string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", err
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err != nil {
+		return "", "", err
+	}
+	target := filepath.Join(dir, filepath.Base(abs))
+	cache, err := CacheDir()
+	if err != nil {
+		return "", "", err
+	}
+	sum := sha256.Sum256([]byte(target))
+	return filepath.Join(cache, "provlift", "recovery", hex.EncodeToString(sum[:])+".json"), target, nil
+}
+
+func recordBackup(path string, content []byte) (string, error) {
+	entry, target, err := journalEntry(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(content)
+	data, err := json.Marshal(journalRecord{Path: target, SHA256: hex.EncodeToString(sum[:])})
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(entry)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(dir, ".entry-*")
+	if err != nil {
+		return "", err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		tmp.Close()
+		os.Remove(tmpName)
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil {
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmpName, entry); err != nil {
+		return "", err
+	}
+	return entry, nil
+}
+
+// verifyBackup confirms that the backup of path is one provlift recorded and
+// that its content is unchanged, and returns its journal entry.
+func verifyBackup(path string) (string, error) {
+	backup := path + ".provlift-backup"
+	entry, target, err := journalEntry(path)
+	if err != nil {
+		return "", unrecordedBackupError(backup, fmt.Sprintf("recovery journal unavailable: %v", err))
+	}
+	data, err := os.ReadFile(entry)
+	if os.IsNotExist(err) {
+		return "", unrecordedBackupError(backup, "provlift has no record of creating it")
+	} else if err != nil {
+		return "", unrecordedBackupError(backup, fmt.Sprintf("reading recovery journal: %v", err))
+	}
+	var record journalRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return "", unrecordedBackupError(backup, fmt.Sprintf("reading recovery journal: %v", err))
+	}
+	content, err := os.ReadFile(backup)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(content)
+	if record.Path != target || record.SHA256 != hex.EncodeToString(sum[:]) {
+		return "", unrecordedBackupError(backup, "it does not match the backup provlift recorded")
+	}
+	return entry, nil
+}
+
+func unrecordedBackupError(backup, reason string) error {
+	return fmt.Errorf("refusing to restore %s: %s; inspect it and delete it if it is unexpected", backup, reason)
 }
