@@ -154,6 +154,7 @@ first release in the next major series, skipping intervening patch/minor release
 | Response bodies capped at 16 MiB | `client.get` |
 | Ignored and unselected providers filtered **before** any network request | `cli.eligibleProviders` |
 | Atomic file replacement with rollback and interrupted-run recovery | `hcledit.writeFileAtomic` |
+| Only backups provlift recorded (path and SHA-256, kept in the user cache) are restored; any other `.tf.provlift-backup` stops `upgrade` | `hcledit.Recover` |
 | Stale-scan detection before splicing | `hcledit.verifyRange` |
 | `.provlift.yaml` rejects unknown keys rather than silently ignoring typos | `yaml.KnownFields(true)` |
 
