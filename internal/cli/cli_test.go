@@ -1210,6 +1210,34 @@ func TestUpgradeIgnoredProviderIsNeverTouched(t *testing.T) {
 	}
 }
 
+func TestUpgradeRejectsUnpublishedExplicitVersion(t *testing.T) {
+	h := newHarness(t, nil)
+	before := h.mainTF(t)
+
+	err := h.run(t, newUpgradeCommand(h.opts), "--provider", "azurerm", "--to", "4.99.0", "--level", "minor", "--skip-init")
+	if code := exitCode(t, err); code != ExitError {
+		t.Fatalf("exit code = %d, want %d: %v", code, ExitError, err)
+	}
+	if !strings.Contains(err.Error(), "not a published version") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := h.mainTF(t); got != before {
+		t.Fatalf("main.tf changed for an unpublished target:\n%s", got)
+	}
+}
+
+func TestUpgradeExplainsWhenExplicitVersionMissesRequestedPlatform(t *testing.T) {
+	h := newHarness(t, nil)
+
+	err := h.run(t, newUpgradeCommand(h.opts), "--provider", "azurerm", "--to", "4.81.0", "--level", "minor", "--platforms", "freebsd_amd64", "--skip-init")
+	if code := exitCode(t, err); code != ExitError {
+		t.Fatalf("exit code = %d, want %d: %v", code, ExitError, err)
+	}
+	if !strings.Contains(err.Error(), "does not support the requested platforms") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestUpgradeToRequiresExactlyOneProvider(t *testing.T) {
 	h := newHarness(t, nil)
 

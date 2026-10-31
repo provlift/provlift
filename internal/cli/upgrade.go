@@ -17,6 +17,7 @@ import (
 	"github.com/provlift/provlift/internal/lockfile"
 	"github.com/provlift/provlift/internal/model"
 	"github.com/provlift/provlift/internal/pullrequest"
+	"github.com/provlift/provlift/internal/registry"
 	"github.com/provlift/provlift/internal/report"
 	"github.com/provlift/provlift/internal/upgrade"
 )
@@ -318,8 +319,14 @@ func buildPlan(ws *workspace, statuses []*upgrade.Status, vs versionSet, request
 				level = configured
 			}
 		}
+		if explicit != nil && !containsVersion(vs.Get(st.Address), explicit) && containsPublishedVersion(vs.Published(st.Address), explicit) {
+			return nil, fmt.Errorf("%s is published for %s but does not support the requested platforms", explicit, st.Source)
+		}
 		if st.Error != "" {
 			return nil, fmt.Errorf("registry lookup failed for %s in %s: %s", st.Source, st.Module, st.Error)
+		}
+		if explicit != nil && !containsVersion(vs.Get(st.Address), explicit) {
+			return nil, fmt.Errorf("%s is not a published version of %s", explicit, st.Source)
 		}
 
 		action, reason, err := upgrade.PlanAction(mod, st, vs.Get(st.Address), upgrade.PlanOptions{
@@ -347,6 +354,24 @@ func buildPlan(ws *workspace, statuses []*upgrade.Status, vs versionSet, request
 		plan.Actions = append(plan.Actions, *action)
 	}
 	return plan, nil
+}
+
+func containsVersion(candidates []*version.Version, target *version.Version) bool {
+	for _, candidate := range candidates {
+		if candidate.Equal(target) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPublishedVersion(candidates []registry.Version, target *version.Version) bool {
+	for _, candidate := range candidates {
+		if candidate.Version.Equal(target) {
+			return true
+		}
+	}
+	return false
 }
 
 func findModule(ws *workspace, relDir string) *model.Module {
