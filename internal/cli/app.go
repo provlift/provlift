@@ -155,13 +155,21 @@ func (g *globalOptions) stderr() io.Writer {
 
 // versionSet holds registry lookup results keyed by provider address.
 type versionSet struct {
-	versions map[string][]*version.Version
-	errs     map[string]error
+	versions  map[string][]*version.Version
+	published map[string][]registry.Version
+	errs      map[string]error
 }
 
-// Get returns the known versions for addr; a missing entry yields nil, which
-// downstream code treats as "nothing to upgrade to".
+// Get returns the platform-compatible versions for addr; a missing entry
+// yields nil, which downstream code treats as "nothing to upgrade to".
 func (v versionSet) Get(addr model.Address) []*version.Version { return v.versions[addr.String()] }
+
+// Published returns every version advertised by the registry before platform
+// filtering, so callers can distinguish an unknown version from one that does
+// not support the requested platforms.
+func (v versionSet) Published(addr model.Address) []registry.Version {
+	return v.published[addr.String()]
+}
 
 // Err returns the lookup error for addr, if any.
 func (v versionSet) Err(addr model.Address) error { return v.errs[addr.String()] }
@@ -174,8 +182,9 @@ func fetchVersions(ctx context.Context, reg *registry.Client, addrs []model.Addr
 	const maxConcurrent = 6
 
 	out := versionSet{
-		versions: make(map[string][]*version.Version, len(addrs)),
-		errs:     make(map[string]error, len(addrs)),
+		versions:  make(map[string][]*version.Version, len(addrs)),
+		published: make(map[string][]registry.Version, len(addrs)),
+		errs:      make(map[string]error, len(addrs)),
 	}
 
 	var mu sync.Mutex
@@ -197,6 +206,7 @@ func fetchVersions(ctx context.Context, reg *registry.Client, addrs []model.Addr
 				out.errs[addr.String()] = err
 				return
 			}
+			out.published[addr.String()] = versions
 			parsed := make([]*version.Version, 0, len(versions))
 			for _, v := range versions {
 				if !supportsPlatforms(v.Platforms, platforms) {
