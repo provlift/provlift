@@ -927,6 +927,8 @@ func TestUpgradeJSONDoesNotReportRestoredLockFile(t *testing.T) {
 func TestUpgradeJSONReportsConstraintEditsWhenLockSnapshotFails(t *testing.T) {
 	h := newHarness(t, nil)
 	h.opts.jsonOut = true
+	// The binary must resolve so the constraint edit lands before the snapshot fails.
+	useFakeTerraform(t, h)
 	lockPath := filepath.Join(h.dir, ".terraform.lock.hcl")
 	var once sync.Once
 	var replaceErr error
