@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	version "github.com/hashicorp/go-version"
 	"github.com/spf13/cobra"
 
@@ -265,16 +267,18 @@ func selectorsMatch(addr model.Address, selectors []string) bool {
 	return false
 }
 
-// moduleMatches filters modules by a list of path prefixes.
+// moduleMatches filters modules by slash-separated doublestar globs. A bare
+// directory matches that directory and all of its descendants.
 func moduleMatches(rel string, filters []string) bool {
 	if len(filters) == 0 {
 		return true
 	}
-	for _, f := range filters {
-		if rel == f {
+	for _, filter := range filters {
+		filter = strings.TrimSuffix(strings.TrimPrefix(filepath.ToSlash(filter), "./"), "/")
+		if rel == filter || strings.HasPrefix(rel, filter+"/") {
 			return true
 		}
-		if ok, _ := filepath.Match(f, rel); ok {
+		if ok, err := doublestar.Match(filter, rel); err == nil && ok {
 			return true
 		}
 	}
