@@ -2,6 +2,7 @@ package upgrade
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	version "github.com/hashicorp/go-version"
@@ -609,6 +610,22 @@ func TestPlanActionExplicitTarget(t *testing.T) {
 		}
 		if action.To != "4.81.0" {
 			t.Errorf("To = %s, want 4.81.0", action.To)
+		}
+	})
+
+	t.Run("refuses unpublished targets", func(t *testing.T) {
+		action, reason, err := PlanAction(mod, st, candidates, PlanOptions{
+			Level:    LevelMajor,
+			Explicit: mustVersion(t, "4.99.0"),
+		})
+		if action != nil {
+			t.Fatal("an unpublished target must not be planned")
+		}
+		if reason != "" {
+			t.Fatalf("reason = %q, want empty when returning an error", reason)
+		}
+		if err == nil || !strings.Contains(err.Error(), "not a published version") {
+			t.Fatalf("err = %v, want an unpublished-version error", err)
 		}
 	})
 
