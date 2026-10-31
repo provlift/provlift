@@ -58,8 +58,10 @@ func (s Shape) String() string {
 var termPattern = regexp.MustCompile(`^(>=|<=|!=|~>|>|<|=)?\s*(.+)$`)
 
 type term struct {
-	op       string
-	version  *version.Version
+	op      string
+	version *version.Version
+	// segments is the precision as written, which rewrites preserve. Terraform
+	// reads a one-segment "~> 6" as "~> 6.0"; see pessimisticPrecision.
 	segments int
 }
 
@@ -160,7 +162,7 @@ func Satisfies(constraint string, v *version.Version) (bool, error) {
 	if strings.TrimSpace(constraint) == "" {
 		return !IsPrerelease(v), nil
 	}
-	cs, err := version.NewConstraint(constraint)
+	cs, err := newConstraint(constraint)
 	if err != nil {
 		return false, fmt.Errorf("%w: %q: %v", ErrUnsupportedConstraint, constraint, err)
 	}
@@ -172,6 +174,31 @@ func Satisfies(constraint string, v *version.Version) (bool, error) {
 		}
 	}
 	return cs.Check(v), nil
+}
+
+// newConstraint parses constraint the way Terraform reads it. go-version gives
+// a one-segment "~> 6" no upper bound at all, whereas Terraform reads it as
+// "~> 6.0", which is ">= 6.0, < 7.0". Every version.Constraints built from
+// user text must come from here.
+func newConstraint(constraint string) (version.Constraints, error) {
+	terms := strings.Split(constraint, ",")
+	for i, raw := range terms {
+		m := termPattern.FindStringSubmatch(strings.TrimSpace(raw))
+		if m == nil || m[1] != "~>" {
+			continue
+		}
+		literal := strings.TrimSpace(m[2])
+		if countSegments(literal) != 1 {
+			continue
+		}
+		// Keep any prerelease or metadata suffix after the added segment.
+		cut := len(literal)
+		if j := strings.IndexAny(literal, "-+"); j >= 0 {
+			cut = j
+		}
+		terms[i] = "~> " + literal[:cut] + ".0" + literal[cut:]
+	}
+	return version.NewConstraint(strings.Join(terms, ","))
 }
 
 // Rewrite is the outcome of reconciling a constraint with a target version.
@@ -290,13 +317,18 @@ func RewriteConstraintPinned(existing string, target *version.Version, pin bool)
 
 // pessimisticOperand keeps the precision the author chose. A two-segment
 // "~> 6.0" tracks a whole major series, so it becomes "~> 7.0" rather than
-// narrowing to the target's minor.
+// narrowing to the target's minor. A one-segment "~> 6" means the same to
+// Terraform and becomes "~> 7".
 func pessimisticOperand(t term, target *version.Version) string {
 	seg := segments(target)
-	if t.segments <= 2 {
+	switch t.segments {
+	case 1:
+		return fmt.Sprintf("%d", seg[0])
+	case 2:
 		return fmt.Sprintf("%d.0", seg[0])
+	default:
+		return fmt.Sprintf("%d.%d.%d", seg[0], seg[1], seg[2])
 	}
-	return fmt.Sprintf("%d.%d.%d", seg[0], seg[1], seg[2])
 }
 
 func rewriteRange(terms []term, target *version.Version) (string, error) {
@@ -404,6 +436,15 @@ func RaiseConstraintFloor(existing string, target *version.Version) (Rewrite, er
 		res.Reason = "supported minimum raised to the target version"
 
 	case ShapePessimistic:
+		if terms[0].segments == 1 && segments(terms[0].version)[0] == segments(target)[0] {
+			// "~> 6" admits all of 6.x, but its one segment can only name a
+			// whole major version as the floor.
+			seg := segments(target)
+			res.Reason = fmt.Sprintf(
+				"%q can only declare a whole major version as its floor, not %s; use an explicit range such as %q",
+				existing, target, fmt.Sprintf(">= %s, < %d.0.0", target, seg[0]+1))
+			return res, nil
+		}
 		if terms[0].segments < 3 {
 			current := segments(terms[0].version)
 			targetSegments := segments(target)
@@ -415,7 +456,7 @@ func RaiseConstraintFloor(existing string, target *version.Version) (Rewrite, er
 				return res, nil
 			}
 		}
-		res.New = "~> " + formatVersion(target, maxInt(terms[0].segments, 2))
+		res.New = "~> " + formatVersion(target, terms[0].segments)
 		res.Reason = "pessimistic constraint retargeted at the new version"
 
 	case ShapeRange:
