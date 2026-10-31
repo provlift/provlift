@@ -204,6 +204,15 @@ func TestBuildStatusBlockedDetection(t *testing.T) {
 			wantBlocked: true,
 		},
 		{
+			name:        "one-segment pessimistic blocks a major",
+			source:      "integrations/github",
+			constraint:  "~> 6",
+			locked:      "6.2.1",
+			candidates:  []string{"6.2.1", "6.9.0", "7.0.0"},
+			wantLevel:   LevelMajor,
+			wantBlocked: true,
+		},
+		{
 			name:        "bounded range blocks a major",
 			source:      "hashicorp/azurerm",
 			constraint:  ">= 3.47.0, < 4.0.0",
@@ -259,6 +268,22 @@ func TestBuildStatusBlockedDetection(t *testing.T) {
 				t.Errorf("Blocked = %v, want %v", st.Blocked, tc.wantBlocked)
 			}
 		})
+	}
+}
+
+func TestBuildStatusReadsOneSegmentPessimisticAsTerraformDoes(t *testing.T) {
+	// Terraform reads "~> 6" as ">= 6.0, < 7.0", so 7.0.0 is out of reach.
+	mod, req := buildModule(t, "tf-hub", testCase{
+		source:     "integrations/github",
+		localName:  "github",
+		constraint: "~> 6",
+		locked:     "6.2.1",
+	})
+
+	st := BuildStatus(mod, req, versions(t, "6.2.1", "6.9.0", "7.0.0"), false)
+
+	if st.LatestAllowed != "6.9.0" {
+		t.Errorf("LatestAllowed = %q, want 6.9.0", st.LatestAllowed)
 	}
 }
 

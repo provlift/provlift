@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -142,6 +143,95 @@ func TestUpgradeNeverExceedsDependencyCeiling(t *testing.T) {
 				t.Fatalf("dependency ceiling bypassed (%s, vendored=%t): %s", selection.name, vendored, h.stdout.String())
 			}
 		}
+	}
+}
+
+// normalisedLockFiles declares constraints in the short forms people write,
+// with the lock file recording them in the padded form Terraform writes back.
+// Nothing outside the repository constrains either provider.
+func normalisedLockFiles() map[string]string {
+	return map[string]string{
+		"main.tf": `terraform {
+  required_providers {
+    github = {
+      source  = "integrations/github"
+      version = "~> 6"
+    }
+
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = ">= 4.65, < 5.0"
+    }
+  }
+}
+`,
+		".terraform.lock.hcl": `provider "registry.terraform.io/integrations/github" {
+  version     = "6.2.1"
+  constraints = "~> 6.0"
+}
+
+provider "registry.terraform.io/hashicorp/azurerm" {
+  version     = "4.81.0"
+  constraints = ">= 4.65.0, < 5.0.0"
+}
+`,
+	}
+}
+
+func TestCheckAttributesNormalisedLockConstraintsToTheRepository(t *testing.T) {
+	h := newHarness(t, normalisedLockFiles())
+	h.opts.jsonOut = true
+
+	if err := h.run(t, newCheckCommand(h.opts)); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+
+	var response struct {
+		Providers []struct {
+			Source              string `json:"source"`
+			Blocked             bool   `json:"blocked_by_constraint"`
+			BlockedByDependency bool   `json:"blocked_by_dependency"`
+			ExternalConstraint  string `json:"external_constraint"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(h.stdout.Bytes(), &response); err != nil {
+		t.Fatalf("check output is not JSON: %v\n%s", err, h.stdout.String())
+	}
+	if len(response.Providers) != 2 {
+		t.Fatalf("got %d providers, want 2:\n%s", len(response.Providers), h.stdout.String())
+	}
+
+	for _, provider := range response.Providers {
+		// The lock file's padded spelling is still this repository's own
+		// constraint, so none of it may be blamed on a dependency.
+		if provider.ExternalConstraint != "" || provider.BlockedByDependency {
+			t.Errorf("%s: the repository's own constraint was attributed to a dependency:\n%s",
+				provider.Source, h.stdout.String())
+		}
+		// Only the local "< 5.0" stands between azurerm and 5.6.0.
+		wantBlocked := strings.HasSuffix(provider.Source, "hashicorp/azurerm")
+		if provider.Blocked != wantBlocked {
+			t.Errorf("%s: blocked_by_constraint = %t, want %t", provider.Source, provider.Blocked, wantBlocked)
+		}
+	}
+}
+
+func TestUpgradePastLocalRangeIsPlannedDespiteNormalisedLock(t *testing.T) {
+	h := newHarness(t, normalisedLockFiles())
+	useFakeTerraform(t, h)
+
+	err := h.run(t, newUpgradeCommand(h.opts),
+		"--provider", "azurerm", "--to", "5.6.0", "--level", "major", "--allow-major")
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+
+	out := h.stdout.String()
+	if strings.Contains(out, "dependency") {
+		t.Errorf("the repository's own range was reported as a dependency's:\n%s", out)
+	}
+	if got := h.mainTF(t); !strings.Contains(got, `version = ">= 5.6, < 6.0"`) {
+		t.Errorf("the local range was not moved to admit 5.6.0:\n%s", got)
 	}
 }
 

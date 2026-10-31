@@ -217,7 +217,7 @@ exits non-zero. Validating against a stale lock would be a real finding.
 
 ```bash
 rm -rf .terraform
-provlift check --provider azurerm          # BLOCKED = yes  (local attribution)
+provlift check --provider azurerm          # BLOCKED = dep  (from the lock file, module not named)
 terraform get
 provlift check --provider azurerm          # BLOCKED = dep  (names the module)
 ```

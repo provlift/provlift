@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	version "github.com/hashicorp/go-version"
@@ -57,8 +59,10 @@ func (s Shape) String() string {
 var termPattern = regexp.MustCompile(`^(>=|<=|!=|~>|>|<|=)?\s*(.+)$`)
 
 type term struct {
-	op       string
-	version  *version.Version
+	op      string
+	version *version.Version
+	// segments is the precision as written, which rewrites preserve. Terraform
+	// reads a one-segment "~> 6" as "~> 6.0"; see pessimisticPrecision.
 	segments int
 }
 
@@ -159,7 +163,7 @@ func Satisfies(constraint string, v *version.Version) (bool, error) {
 	if strings.TrimSpace(constraint) == "" {
 		return !IsPrerelease(v), nil
 	}
-	cs, err := version.NewConstraint(constraint)
+	cs, err := newConstraint(constraint)
 	if err != nil {
 		return false, fmt.Errorf("%w: %q: %v", ErrUnsupportedConstraint, constraint, err)
 	}
@@ -171,6 +175,31 @@ func Satisfies(constraint string, v *version.Version) (bool, error) {
 		}
 	}
 	return cs.Check(v), nil
+}
+
+// newConstraint parses constraint the way Terraform reads it. go-version gives
+// a one-segment "~> 6" no upper bound at all, whereas Terraform reads it as
+// "~> 6.0", which is ">= 6.0, < 7.0". Every version.Constraints built from
+// user text must come from here.
+func newConstraint(constraint string) (version.Constraints, error) {
+	terms := strings.Split(constraint, ",")
+	for i, raw := range terms {
+		m := termPattern.FindStringSubmatch(strings.TrimSpace(raw))
+		if m == nil || m[1] != "~>" {
+			continue
+		}
+		literal := strings.TrimSpace(m[2])
+		if countSegments(literal) != 1 {
+			continue
+		}
+		// Keep any prerelease or metadata suffix after the added segment.
+		cut := len(literal)
+		if j := strings.IndexAny(literal, "-+"); j >= 0 {
+			cut = j
+		}
+		terms[i] = "~> " + literal[:cut] + ".0" + literal[cut:]
+	}
+	return version.NewConstraint(strings.Join(terms, ","))
 }
 
 // Rewrite is the outcome of reconciling a constraint with a target version.
@@ -289,13 +318,18 @@ func RewriteConstraintPinned(existing string, target *version.Version, pin bool)
 
 // pessimisticOperand keeps the precision the author chose. A two-segment
 // "~> 6.0" tracks a whole major series, so it becomes "~> 7.0" rather than
-// narrowing to the target's minor.
+// narrowing to the target's minor. A one-segment "~> 6" means the same to
+// Terraform and becomes "~> 7".
 func pessimisticOperand(t term, target *version.Version) string {
 	seg := segments(target)
-	if t.segments <= 2 {
+	switch t.segments {
+	case 1:
+		return fmt.Sprintf("%d", seg[0])
+	case 2:
 		return fmt.Sprintf("%d.0", seg[0])
+	default:
+		return fmt.Sprintf("%d.%d.%d", seg[0], seg[1], seg[2])
 	}
-	return fmt.Sprintf("%d.%d.%d", seg[0], seg[1], seg[2])
 }
 
 func rewriteRange(terms []term, target *version.Version) (string, error) {
@@ -403,6 +437,15 @@ func RaiseConstraintFloor(existing string, target *version.Version) (Rewrite, er
 		res.Reason = "supported minimum raised to the target version"
 
 	case ShapePessimistic:
+		if seg := segments(target); terms[0].segments == 1 && (seg[1] != 0 || seg[2] != 0) {
+			// "~> 6" admits all of 6.x, but its one segment can only name a
+			// whole major version as the floor: "~> 7" for 7.1.0 would still
+			// admit 7.0.0, below the requested minimum.
+			res.Reason = fmt.Sprintf(
+				"%q can only declare a whole major version as its floor, not %s; use an explicit range such as %q",
+				existing, target, fmt.Sprintf(">= %s, < %d.0.0", target, seg[0]+1))
+			return res, nil
+		}
 		if terms[0].segments < 3 {
 			current := segments(terms[0].version)
 			targetSegments := segments(target)
@@ -414,7 +457,7 @@ func RaiseConstraintFloor(existing string, target *version.Version) (Rewrite, er
 				return res, nil
 			}
 		}
-		res.New = "~> " + formatVersion(target, maxInt(terms[0].segments, 2))
+		res.New = "~> " + formatVersion(target, terms[0].segments)
 		res.Reason = "pessimistic constraint retargeted at the new version"
 
 	case ShapeRange:
@@ -431,7 +474,7 @@ func RaiseConstraintFloor(existing string, target *version.Version) (Rewrite, er
 
 	res.Changed = res.New != res.Old
 	if !res.Changed {
-		if shape == ShapePessimistic {
+		if shape == ShapePessimistic && terms[0].segments != 1 {
 			seg := segments(target)
 			// "~> 1.2" admits all of 1.x. Rewriting it to "~> 1.2.34" would
 			// also drop the ceiling to < 1.3.0, which is a different promise.
@@ -483,26 +526,101 @@ func maxInt(a, b int) int {
 	return b
 }
 
-// normalizeTerms splits a constraint into canonical terms, so ">=4.16.0" and
-// ">= 4.16.0" compare equal.
-func normalizeTerms(constraint string) []string {
-	var out []string
+// normalTerm is one term of a constraint in two forms: as the author spelled
+// it, and as a key that is identical for every spelling Terraform reads the
+// same way.
+type normalTerm struct {
+	text    string
+	key     string
+	version *version.Version
+}
+
+// normalizeTerms splits a constraint into its terms. The key compares terms by
+// meaning rather than spelling, so ">=4.16" matches ">= 4.16.0", "6.0.1"
+// matches "= 6.0.1", and "~> 1" matches "~> 1.0". That matters because
+// Terraform rewrites constraints into its own spelling in the lock file.
+func normalizeTerms(constraint string) []normalTerm {
+	var out []normalTerm
 	for _, raw := range strings.Split(constraint, ",") {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue
 		}
-		if m := termPattern.FindStringSubmatch(raw); m != nil {
-			op := m[1]
-			if op == "" {
-				op = "="
-			}
-			out = append(out, op+" "+strings.TrimSpace(m[2]))
-		} else {
-			out = append(out, raw)
+		m := termPattern.FindStringSubmatch(raw)
+		if m == nil {
+			out = append(out, normalTerm{text: raw, key: raw})
+			continue
 		}
+
+		op := m[1]
+		if op == "" {
+			op = "="
+		}
+		literal := strings.TrimSpace(m[2])
+		t := normalTerm{text: op + " " + literal, key: op + " " + literal}
+		if v, err := version.NewVersion(literal); err == nil {
+			t.version = v
+			t.key = op + " " + canonicalOperand(op, v, countSegments(literal))
+		}
+		out = append(out, t)
 	}
 	return out
+}
+
+// canonicalOperand renders v so that operands Terraform treats as equal
+// render identically. Only "~>" depends on how many segments were written:
+// "~> 1.2" and "~> 1.2.0" admit different versions.
+func canonicalOperand(op string, v *version.Version, segs int) string {
+	n := 3
+	if op == "~>" {
+		n = pessimisticPrecision(segs)
+	}
+	seg := segments(v)
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = strconv.Itoa(seg[i])
+	}
+	s := strings.Join(parts, ".")
+	if pre := v.Prerelease(); pre != "" {
+		s += "-" + pre
+	}
+	return s
+}
+
+// pessimisticPrecision is the number of segments Terraform reads from a "~>"
+// operand: it treats "~> 1" as "~> 1.0".
+func pessimisticPrecision(segs int) int {
+	return maxInt(segs, 2)
+}
+
+// CanonicalConstraint renders a constraint so that constraints Terraform reads
+// the same way render identically, whatever their spelling or term order:
+// "6.0.1" and "= 6.0.1", or ">= 4, < 5" and "< 5.0.0, >= 4.0.0". It is for
+// comparison, not display.
+func CanonicalConstraint(constraint string) string {
+	terms := normalizeTerms(constraint)
+	sort.SliceStable(terms, func(i, j int) bool {
+		a, b := terms[i].version, terms[j].version
+		switch {
+		case a != nil && b != nil && !a.Equal(b):
+			return a.LessThan(b)
+		case (a == nil) != (b == nil):
+			// Anything that is not a version sorts last.
+			return a != nil
+		default:
+			return terms[i].key < terms[j].key
+		}
+	})
+
+	seen := map[string]bool{}
+	out := make([]string, 0, len(terms))
+	for _, t := range terms {
+		if !seen[t.key] {
+			seen[t.key] = true
+			out = append(out, t.key)
+		}
+	}
+	return strings.Join(out, ", ")
 }
 
 // ExternalConstraint returns the terms present in merged but not declared
@@ -511,7 +629,8 @@ func normalizeTerms(constraint string) []string {
 // Terraform records the merged constraints of the whole module tree in the
 // lock file. Subtracting what this repository declares leaves the terms
 // imposed by its dependencies — typically a ceiling inside a shared module
-// that no file in this repository mentions.
+// that no file in this repository mentions. Terms are compared by meaning,
+// because the lock file records ">= 4.65" as ">= 4.65.0".
 func ExternalConstraint(merged, local string) string {
 	if strings.TrimSpace(merged) == "" {
 		return ""
@@ -519,13 +638,13 @@ func ExternalConstraint(merged, local string) string {
 
 	declared := map[string]bool{}
 	for _, t := range normalizeTerms(local) {
-		declared[t] = true
+		declared[t.key] = true
 	}
 
 	var out []string
 	for _, t := range normalizeTerms(merged) {
-		if !declared[t] {
-			out = append(out, t)
+		if !declared[t.key] {
+			out = append(out, t.text)
 		}
 	}
 	return strings.Join(out, ", ")

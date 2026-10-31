@@ -8,13 +8,13 @@
 package drift
 
 import (
-	"regexp"
 	"sort"
 	"strings"
 
 	version "github.com/hashicorp/go-version"
 
 	"github.com/provlift/provlift/internal/model"
+	"github.com/provlift/provlift/internal/upgrade"
 )
 
 // VersionUse records the modules sharing one locked version.
@@ -191,8 +191,9 @@ func spanBetween(oldest, newest string) string {
 
 func findConstraintDivergence(inv *model.Inventory, opts Options) []ConstraintDivergence {
 	type entry struct {
-		addr model.Address
-		byC  map[string][]string // constraint -> modules
+		addr    model.Address
+		byC     map[string][]string // normalized constraint -> modules
+		display map[string]string   // normalized constraint -> text as written
 	}
 
 	providers := map[string]*entry{}
@@ -205,13 +206,17 @@ func findConstraintDivergence(inv *model.Inventory, opts Options) []ConstraintDi
 			key := req.Address.String()
 			e, ok := providers[key]
 			if !ok {
-				e = &entry{addr: req.Address, byC: map[string][]string{}}
+				e = &entry{addr: req.Address, byC: map[string][]string{}, display: map[string]string{}}
 				providers[key] = e
 			}
 
 			constraint := NormalizeConstraint(req.Constraint)
+			written := strings.TrimSpace(req.Constraint)
 			if constraint == "" {
-				constraint = "(none)"
+				constraint, written = "(none)", "(none)"
+			}
+			if _, ok := e.display[constraint]; !ok {
+				e.display[constraint] = written
 			}
 			e.byC[constraint] = append(e.byC[constraint], mod.RelDir)
 		}
@@ -226,7 +231,7 @@ func findConstraintDivergence(inv *model.Inventory, opts Options) []ConstraintDi
 		uses := make([]ConstraintUse, 0, len(e.byC))
 		for c, mods := range e.byC {
 			sort.Strings(mods)
-			uses = append(uses, ConstraintUse{Constraint: c, Modules: mods})
+			uses = append(uses, ConstraintUse{Constraint: e.display[c], Modules: mods})
 		}
 		sort.Slice(uses, func(i, j int) bool { return uses[i].Constraint < uses[j].Constraint })
 
@@ -268,23 +273,9 @@ func findUnpinned(inv *model.Inventory, opts Options) []Unpinned {
 	return out
 }
 
-var operatorPattern = regexp.MustCompile(`^(>=|<=|!=|~>|>|<|=)\s*(.+)$`)
-
-// NormalizeConstraint makes cosmetically different constraints comparable, so
-// ">=4.16.0" and ">= 4.16.0" are not reported as a difference.
+// NormalizeConstraint makes constraints that Terraform reads the same way
+// comparable, so ">=4.16" and ">= 4.16.0", "6.0.1" and "= 6.0.1", or terms
+// listed in another order are not reported as a difference.
 func NormalizeConstraint(raw string) string {
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if m := operatorPattern.FindStringSubmatch(p); m != nil {
-			p = m[1] + " " + strings.TrimSpace(m[2])
-		}
-		out = append(out, p)
-	}
-	return strings.Join(out, ", ")
+	return upgrade.CanonicalConstraint(raw)
 }

@@ -56,6 +56,7 @@ func TestRewriteConstraintLeavesSatisfiedConstraintsAlone(t *testing.T) {
 		target     string
 	}{
 		{"~> 6.0", "6.3.1"},
+		{"~> 6", "6.9.0"},
 		{"~> 6.2.0", "6.2.5"},
 		{">= 3.0", "5.0.0"},
 		{">= 3.0, < 4.0", "3.9.0"},
@@ -87,6 +88,8 @@ func TestRewriteConstraintPreservesStyle(t *testing.T) {
 	}{
 		{"pessimistic major bump tracks the new series", "~> 6.0", "7.0.0", "~> 7.0"},
 		{"pessimistic major bump from a non-zero minor", "~> 6.4", "7.2.0", "~> 7.0"},
+		{"one-segment pessimistic keeps its precision", "~> 6", "7.1.0", "~> 7"},
+		{"one-segment pessimistic without spacing", "~>6", "7.1.0", "~> 7"},
 		{"three-segment pessimistic keeps precision", "~> 6.2.0", "6.4.1", "~> 6.4.1"},
 		{"explicit equals is preserved", "= 3.1.0", "3.2.0", "= 3.2.0"},
 		{"bare pin stays bare", "3.1.0", "3.2.0", "3.2.0"},
@@ -279,6 +282,12 @@ func TestSatisfies(t *testing.T) {
 		{"", "9.9.9", true},
 		{"~> 6.0", "6.9.9", true},
 		{"~> 6.0", "7.0.0", false},
+		// Terraform reads "~> 6" as "~> 6.0"; go-version alone gives it no
+		// upper bound.
+		{"~> 6", "6.9.0", true},
+		{"~> 6", "7.0.0", false},
+		{"~>6", "7.0.0", false},
+		{">= 6.2, ~> 6", "7.0.0", false},
 		{"~> 6.2.0", "6.2.9", true},
 		{"~> 6.2.0", "6.3.0", false},
 		{">= 3.0, < 4.0", "3.5.0", true},
@@ -322,6 +331,7 @@ func TestRaiseConstraintFloor(t *testing.T) {
 		{"inclusive range ceiling retains patch precision", ">= 3.0, <= 4.0", "5.6.1", ">= 5.6, <= 5.6.1"},
 		{"pessimistic retargets", "~> 1.2.21", "1.2.34", "~> 1.2.34"},
 		{"pessimistic two segment", "~> 4.65", "4.81.0", "~> 4.81"},
+		{"pessimistic one segment moves by major", "~> 6", "7.0.0", "~> 7"},
 		{"exact pin moves", "3.4.0", "3.9.0", "3.9.0"},
 	}
 
@@ -391,6 +401,7 @@ func TestConstraintShapesRoundTrip(t *testing.T) {
 	}{
 		{"exact", "= 3.1.0", "3.2.0", false, "= 3.2.0"},
 		{"bare pin", "3.1.0", "3.2.0", false, "3.2.0"},
+		{"one-segment pessimistic", "~> 6", "7.1.0", false, "~> 7"},
 		{"two-segment pessimistic", "~> 6.0", "7.0.0", false, "~> 7.0"},
 		{"three-segment pessimistic", "~> 6.2.0", "6.4.1", false, "~> 6.4.1"},
 		{"inclusive lower bound", ">= 3.85.0", "5.6.0", true, ">= 5.6.0"},

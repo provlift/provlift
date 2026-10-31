@@ -120,3 +120,44 @@ func TestRaiseConstraintFloorExplainsWhyPessimisticCannotMove(t *testing.T) {
 		t.Errorf("reason should suggest an explicit range: %q", got.Reason)
 	}
 }
+
+func TestRaiseConstraintFloorExplainsWhyOneSegmentPessimisticCannotMove(t *testing.T) {
+	// "~> 6" can only name a whole major version as its floor, so it cannot
+	// declare 6.3.0 without changing its shape. The reason has to say so.
+	got, err := RaiseConstraintFloor("~> 6", mustVersion(t, "6.3.0"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Changed {
+		t.Fatalf("expected no change, got %q", got.New)
+	}
+	if strings.Contains(got.Reason, "already") {
+		t.Errorf("reason wrongly claims the floor is already set: %q", got.Reason)
+	}
+	if !strings.Contains(got.Reason, ">= 6.3.0, < 7.0.0") {
+		t.Errorf("reason should suggest an explicit range: %q", got.Reason)
+	}
+}
+
+func TestRaiseConstraintFloorOneSegmentAcrossMajors(t *testing.T) {
+	// "~> 7" for 7.1.0 would still admit 7.0.0, below the requested floor, so
+	// only a whole-major target may be written in the one-segment style.
+	got, err := RaiseConstraintFloor("~> 6", mustVersion(t, "7.1.0"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Changed {
+		t.Fatalf("expected no change, got %q", got.New)
+	}
+	if !strings.Contains(got.Reason, ">= 7.1.0, < 8.0.0") {
+		t.Errorf("reason should suggest an explicit range: %q", got.Reason)
+	}
+
+	got, err = RaiseConstraintFloor("~> 6", mustVersion(t, "7.0.0"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.Changed || got.New != "~> 7" {
+		t.Errorf("whole-major target: got %q (changed=%t), want \"~> 7\"", got.New, got.Changed)
+	}
+}
