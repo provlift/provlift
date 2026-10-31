@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	version "github.com/hashicorp/go-version"
@@ -483,26 +484,69 @@ func maxInt(a, b int) int {
 	return b
 }
 
-// normalizeTerms splits a constraint into canonical terms, so ">=4.16.0" and
-// ">= 4.16.0" compare equal.
-func normalizeTerms(constraint string) []string {
-	var out []string
+// normalTerm is one term of a constraint in two forms: as the author spelled
+// it, and as a key that is identical for every spelling Terraform reads the
+// same way.
+type normalTerm struct {
+	text string
+	key  string
+}
+
+// normalizeTerms splits a constraint into its terms. The key compares terms by
+// meaning rather than spelling, so ">=4.16" matches ">= 4.16.0", "6.0.1"
+// matches "= 6.0.1", and "~> 1" matches "~> 1.0". That matters because
+// Terraform rewrites constraints into its own spelling in the lock file.
+func normalizeTerms(constraint string) []normalTerm {
+	var out []normalTerm
 	for _, raw := range strings.Split(constraint, ",") {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			continue
 		}
-		if m := termPattern.FindStringSubmatch(raw); m != nil {
-			op := m[1]
-			if op == "" {
-				op = "="
-			}
-			out = append(out, op+" "+strings.TrimSpace(m[2]))
-		} else {
-			out = append(out, raw)
+		m := termPattern.FindStringSubmatch(raw)
+		if m == nil {
+			out = append(out, normalTerm{text: raw, key: raw})
+			continue
 		}
+
+		op := m[1]
+		if op == "" {
+			op = "="
+		}
+		literal := strings.TrimSpace(m[2])
+		t := normalTerm{text: op + " " + literal, key: op + " " + literal}
+		if v, err := version.NewVersion(literal); err == nil {
+			t.key = op + " " + canonicalOperand(op, v, countSegments(literal))
+		}
+		out = append(out, t)
 	}
 	return out
+}
+
+// canonicalOperand renders v so that operands Terraform treats as equal
+// render identically. Only "~>" depends on how many segments were written:
+// "~> 1.2" and "~> 1.2.0" admit different versions.
+func canonicalOperand(op string, v *version.Version, segs int) string {
+	n := 3
+	if op == "~>" {
+		n = pessimisticPrecision(segs)
+	}
+	seg := segments(v)
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = strconv.Itoa(seg[i])
+	}
+	s := strings.Join(parts, ".")
+	if pre := v.Prerelease(); pre != "" {
+		s += "-" + pre
+	}
+	return s
+}
+
+// pessimisticPrecision is the number of segments Terraform reads from a "~>"
+// operand: it treats "~> 1" as "~> 1.0".
+func pessimisticPrecision(segs int) int {
+	return maxInt(segs, 2)
 }
 
 // ExternalConstraint returns the terms present in merged but not declared
@@ -511,7 +555,8 @@ func normalizeTerms(constraint string) []string {
 // Terraform records the merged constraints of the whole module tree in the
 // lock file. Subtracting what this repository declares leaves the terms
 // imposed by its dependencies — typically a ceiling inside a shared module
-// that no file in this repository mentions.
+// that no file in this repository mentions. Terms are compared by meaning,
+// because the lock file records ">= 4.65" as ">= 4.65.0".
 func ExternalConstraint(merged, local string) string {
 	if strings.TrimSpace(merged) == "" {
 		return ""
@@ -519,13 +564,13 @@ func ExternalConstraint(merged, local string) string {
 
 	declared := map[string]bool{}
 	for _, t := range normalizeTerms(local) {
-		declared[t] = true
+		declared[t.key] = true
 	}
 
 	var out []string
 	for _, t := range normalizeTerms(merged) {
-		if !declared[t] {
-			out = append(out, t)
+		if !declared[t.key] {
+			out = append(out, t.text)
 		}
 	}
 	return strings.Join(out, ", ")

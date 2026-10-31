@@ -60,6 +60,82 @@ func TestExternalConstraint(t *testing.T) {
 	}
 }
 
+func TestExternalConstraintIgnoresLockFileSpelling(t *testing.T) {
+	// Terraform rewrites every constraint it records in the lock file into a
+	// fixed spelling. Each of these is the repository's own constraint, so
+	// nothing is left over to attribute to a dependency.
+	tests := []struct {
+		name     string
+		lockForm string
+		declared string
+	}{
+		{"range padded to three segments", ">= 4.65.0, < 5.0.0", ">= 4.65, < 5.0"},
+		{"lower bound padded", ">= 1.9.0", ">= 1.9"},
+		{"one-segment lower bound padded", ">= 4.0.0", ">= 4"},
+		{"one-segment pessimistic widened", "~> 1.0", "~> 1"},
+		{"two-segment pessimistic kept", "~> 6.0", "~> 6.0"},
+		{"three-segment pessimistic kept", "~> 1.2.0", "~> 1.2.0"},
+		{"bare pin", "6.0.1", "6.0.1"},
+		{"explicit equals recorded bare", "6.0.1", "= 6.0.1"},
+		{"short pin padded", "3.1.0", "3.1"},
+		{"strict bounds padded", "> 2.0.0, <= 3.0.0", "> 2, <= 3"},
+		{"exclusion padded", ">= 1.0.0, != 1.5.0", ">= 1.0, != 1.5"},
+		{"prerelease pin", "5.0.0-beta.1", "= 5.0.0-beta.1"},
+		{"terms reordered", ">= 4.65.0, < 5.0.0", "< 5.0, >= 4.65"},
+		{"spacing removed", ">= 4.65.0, < 5.0.0", ">=4.65,<5.0"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ExternalConstraint(tc.lockForm, tc.declared); got != "" {
+				t.Errorf("ExternalConstraint(%q, %q) = %q, want nothing external",
+					tc.lockForm, tc.declared, got)
+			}
+		})
+	}
+}
+
+func TestExternalConstraintStillFindsDependencyTerms(t *testing.T) {
+	tests := []struct {
+		name   string
+		merged string
+		local  string
+		want   string
+	}{
+		{"ceiling beside a padded floor", ">= 4.65.0, < 4.70.0", ">= 4.65", "< 4.70.0"},
+		{"second floor beside a padded floor", ">= 4.65.0, >= 4.70.0", ">= 4.65", ">= 4.70.0"},
+		{"finer pessimistic is a different term", "~> 1.2.0, ~> 1.2", "~> 1.2", "~> 1.2.0"},
+		{"coarser pessimistic is a different term", "~> 1.2", "~> 1.2.0", "~> 1.2"},
+		{"different pin", "6.0.2", "= 6.0.1", "= 6.0.2"},
+		{"different operator on the same version", "> 4.65.0", ">= 4.65", "> 4.65.0"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ExternalConstraint(tc.merged, tc.local); got != tc.want {
+				t.Errorf("ExternalConstraint(%q, %q) = %q, want %q",
+					tc.merged, tc.local, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildStatusAttributesNormalisedLockConstraintToTheRepository(t *testing.T) {
+	// The lock file records ">= 3.85, < 5.0" as ">= 3.85.0, < 5.0.0". It is
+	// the repository's own range, not a dependency's, that forbids 5.6.0.
+	_, st, _ := lockedModule(t, ">= 3.85, < 5.0", "4.81.0", ">= 3.85.0, < 5.0.0")
+
+	if st.ExternalConstraint != "" {
+		t.Errorf("ExternalConstraint = %q, want none", st.ExternalConstraint)
+	}
+	if st.BlockedByDependency {
+		t.Error("BlockedByDependency should be false: no dependency constrains this provider")
+	}
+	if !st.Blocked {
+		t.Error("Blocked should be true: the repository's own range forbids 5.6.0")
+	}
+}
+
 func TestFilterSatisfying(t *testing.T) {
 	candidates := versions(t, "3.117.1", "4.11.0", "4.19.0", "4.81.0", "5.6.0")
 
