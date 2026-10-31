@@ -1,0 +1,10 @@
+---
+// The provlift mark from brand/svg/icon.svg, inlined so it follows the theme.
+interface Props { size?: number }
+const { size = 32 } = Astro.props;
+---
+<svg class="logo" viewBox="0 0 64 64" width={size} height={size} role="img" aria-label="provlift logo">
+  <rect class="bar-low" x="8" y="46" width="48" height="10" rx="3" />
+  <rect class="bar-high" x="14" y="32" width="36" height="10" rx="3" />
+  <polyline class="chevron" points="18,23 32,10 46,23" />
+</svg>
