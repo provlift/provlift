@@ -1,0 +1,211 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Format and vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would change these files:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: Check go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - run: go vet ./...
+
+  unit-tests:
+    name: Go unit and package tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # CGO is free on Linux runners, so there is no reason not to run the
+      # race detector on every commit.
+      - name: Run tests with race detection and coverage
+        env:
+          CGO_ENABLED: 1
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Report coverage
+        run: |
+          go tool cover -func=coverage.out | tail -n 1
+          total=$(go tool cover -func=coverage.out | awk 'END {print substr($3, 1, length($3)-1)}')
+          echo "### Coverage: ${total}%" >> "$GITHUB_STEP_SUMMARY"
+          # The tool edits users' Terraform in place, so thin coverage is
+          # not a style question.
+          awk -v t="$total" 'BEGIN { exit (t < 80) ? 1 : 0 }' || {
+            echo "::error::coverage ${total}% is below the 80% minimum"
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.out
+
+  workflows:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The workflows under examples/ are copied verbatim into users'
+      # repositories, so a broken one is shipped breakage.
+      - name: actionlint
+        run: |
+          set -euo pipefail
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          lint="$PWD/actionlint"
+          "$lint" -color .github/workflows/*.yml
+
+          # actionlint only looks at .github/workflows, so the examples are
+          # linted in a scratch repository shaped the way they will be used.
+          scratch=$(mktemp -d)
+          mkdir -p "$scratch/.github/workflows"
+          cp examples/workflows/*.yml "$scratch/.github/workflows/"
+          git -C "$scratch" init -q
+          (cd "$scratch" && "$lint" -color .github/workflows/*.yml)
+
+  build:
+    name: Cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Users run the tool on Windows and macOS while CI runs on Linux.
+      # Cross-compiling every commit stops a platform-specific break reaching
+      # a release tag.
+      - name: Cross-compile
+        run: |
+          set -euo pipefail
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            GOOS=${target%/*} GOARCH=${target#*/} go build ./...
+            echo "built $target"
+          done
+
+  end-to-end:
+    name: End to end against Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # The wrapper replaces terraform with a script that rewrites stdout,
+          # which this tool parses.
+          terraform_wrapper: false
+
+      - name: Build
+        run: go build -o "$RUNNER_TEMP/provlift" ./cmd/provlift
+
+      - name: Verify offline prerelease selection with Terraform
+        run: go test ./internal/upgrade -run '^TestPrereleaseExactPinWithTerraform$' -count=1 -v
+
+      # Unit tests use a fake registry and a fake Terraform. This proves the
+      # tool works against the real ones.
+      - name: Upgrade a real module
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/fixture"
+          mkdir -p "$work"
+          cat > "$work/versions.tf" <<'EOF'
+          terraform {
+            required_version = ">= 1.5.0"
+
+            required_providers {
+              # A comment that must survive the edit.
+              null = {
+                source  = "hashicorp/null"
+                version = "~> 3.1.0"
+              }
+            }
+          }
+          EOF
+
+          "$RUNNER_TEMP/provlift" check --dir "$work"
+          "$RUNNER_TEMP/provlift" upgrade --dir "$work" --level minor --pr-body "$RUNNER_TEMP/pr.md" --json > "$RUNNER_TEMP/result.json"
+
+          echo "--- versions.tf ---"
+          cat "$work/versions.tf"
+
+          grep -q "A comment that must survive the edit" "$work/versions.tf" \
+            || { echo "::error::the edit destroyed a comment"; exit 1; }
+          test -f "$work/.terraform.lock.hcl" \
+            || { echo "::error::Terraform did not produce a lock file"; exit 1; }
+
+          echo "--- pull request ---"
+          cat "$RUNNER_TEMP/pr.md" >> "$GITHUB_STEP_SUMMARY"
+
+          jq -e '.pull_request.branch != "" and .pull_request.title != ""' "$RUNNER_TEMP/result.json" > /dev/null \
+            || { echo "::error::no pull request metadata was emitted"; exit 1; }
+
+          # Every Terraform command the tool ran must have succeeded.
+          jq -e 'all(.terraform_runs[]; .ok)' "$RUNNER_TEMP/result.json" > /dev/null \
+            || { echo "::error::a Terraform command failed"; jq '.terraform_runs' "$RUNNER_TEMP/result.json"; exit 1; }
+
+      - name: Next release and same-target idempotency
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/fixture"
+          "$RUNNER_TEMP/provlift" upgrade --dir "$work" --level minor --dry-run --json > "$RUNNER_TEMP/again.json"
+          jq -e '(.plan.actions | length) == 1 and
+                 .plan.actions[0].from == "3.1.1" and
+                 .plan.actions[0].to == "3.2.0"' "$RUNNER_TEMP/again.json" > /dev/null || {
+            echo "::error::the next release was not planned after the first patch"
+            jq '.plan.actions' "$RUNNER_TEMP/again.json"
+            exit 1
+          }
+
+          "$RUNNER_TEMP/provlift" upgrade --dir "$work" --provider null --to 3.1.1 \
+            --level minor --dry-run --json > "$RUNNER_TEMP/same-target.json"
+          jq -e '(.plan.actions // [] | length) == 0' "$RUNNER_TEMP/same-target.json" > /dev/null || {
+            echo "::error::requesting the already selected version planned another change"
+            jq '.plan.actions' "$RUNNER_TEMP/same-target.json"
+            exit 1
+          }

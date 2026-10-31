@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/provlift/provlift/security/advisories/new
+    about: Please report security issues privately, not as a public issue.
+  - name: Documentation
+    url: https://github.com/provlift/provlift/tree/main/docs
+    about: Installation, CLI reference, upgrade behavior and troubleshooting.

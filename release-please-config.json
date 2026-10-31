@@ -1,0 +1,14 @@
+{
+  "release-type": "go",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "include-component-in-tag": false,
+  "packages": {
+    ".": {
+      "extra-files": [
+        "examples/workflows/provider-compatibility.yml",
+        "examples/workflows/provider-upgrades.yml"
+      ]
+    }
+  }
+}

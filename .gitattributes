@@ -1,0 +1,14 @@
+# Go tooling assumes LF. Without this, Windows checkouts get CRLF and
+# `gofmt -l .` reports every file as unformatted, which fails CI.
+* text=auto eol=lf
+
+*.go    text eol=lf
+*.mod   text eol=lf
+*.sum   text eol=lf
+*.md    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.tf    text eol=lf
+*.hcl   text eol=lf
+
+*.exe binary

@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify the tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A tag is permanent and people will install from it, so re-run the
+      # gates here rather than trusting that the commit was green.
+      - name: Format, vet and test
+        env:
+          CGO_ENABLED: 1
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          go test -race ./...
+
+      - name: Reject a tag that is not semver
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$tag is not a semantic version, e.g. v1.2.3"
+            exit 1
+          fi
+
+  release:
+    name: Build and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tag messages and history are needed for the release notes.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build every platform
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          commit="${GITHUB_SHA}"
+          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          mkdir -p dist
+
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            name="provlift_${version}_${goos}_${goarch}"
+            out="dist/${name}/provlift"
+            if [ "$goos" = "windows" ]; then out="${out}.exe"; fi
+
+            mkdir -p "dist/${name}"
+            # -trimpath keeps the runner's directory layout out of the binary,
+            # which is what makes the build reproducible.
+            GOOS=$goos GOARCH=$goarch CGO_ENABLED=0 go build \
+              -trimpath \
+              -ldflags "-s -w -X main.buildVersion=${version} -X main.buildCommit=${commit} -X main.buildDate=${date}" \
+              -o "$out" ./cmd/provlift
+
+            archive_readme="dist/${name}/README.md"
+            sed \
+              -e "s|](docs/|](https://github.com/${GITHUB_REPOSITORY}/blob/${version}/docs/|g" \
+              -e "s|](CHANGELOG.md)|](https://github.com/${GITHUB_REPOSITORY}/blob/${version}/CHANGELOG.md)|g" \
+              -e "s|src=\"brand/|src=\"https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${version}/brand/|g" \
+              README.md > "$archive_readme"
+
+            for guide in docs/*/README.md; do
+              guide_url="https://github.com/${GITHUB_REPOSITORY}/blob/${version}/${guide}"
+              grep -Fq "$guide_url" "$archive_readme" || {
+                echo "::error::archive README does not link to $guide"
+                exit 1
+              }
+            done
+
+            if [ -f LICENSE ]; then cp LICENSE "dist/${name}/"; fi
+
+            if [ "$goos" = "windows" ]; then
+              (cd dist && zip -qr "${name}.zip" "${name}")
+            else
+              (cd dist && tar -czf "${name}.tar.gz" "${name}")
+            fi
+            rm -rf "dist/${name}"
+            echo "packaged ${name}"
+          done
+
+          (cd dist && sha256sum ./*.tar.gz ./*.zip > checksums.txt)
+          cat dist/checksums.txt
+
+      - name: Confirm the binary reports the tag
+        run: |
+          set -euo pipefail
+          tar -xzf "dist/provlift_${GITHUB_REF_NAME}_linux_amd64.tar.gz" -C "$RUNNER_TEMP"
+          reported=$("$RUNNER_TEMP/provlift_${GITHUB_REF_NAME}_linux_amd64/provlift" version)
+          echo "$reported"
+          grep -q "${GITHUB_REF_NAME}" <<<"$reported" \
+            || { echo "::error::the binary does not report ${GITHUB_REF_NAME}"; exit 1; }
+
+      - name: Build release notes
+        run: |
+          set -euo pipefail
+          previous=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+
+          {
+            echo "## Install"
+            echo
+            echo '```bash'
+            echo "go install github.com/provlift/provlift/cmd/provlift@${GITHUB_REF_NAME}"
+            echo '```'
+            echo
+            echo "Or download a binary below and put it on your PATH."
+            echo
+            echo "## Changes"
+            echo
+            if [ -n "$previous" ]; then
+              git log --no-merges --pretty=format:'- %s (%h)' "${previous}..${GITHUB_REF_NAME}"
+              echo
+              echo
+              echo "[Full diff](https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${GITHUB_REF_NAME})"
+            else
+              echo "First release."
+            fi
+          } > notes.md
+
+          cat notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          # A pre-release tag such as v1.2.0-rc.1 should not become "latest".
+          prerelease: ${{ contains(github.ref_name, '-') }}

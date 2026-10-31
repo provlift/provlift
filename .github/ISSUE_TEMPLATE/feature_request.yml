@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest a new capability or an improvement to provlift.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Describing the problem you are trying to solve helps more
+        than a proposed flag name — there may be an existing way to do it, or a better shape for the change.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what makes it hard today?
+      placeholder: "When upgrading providers across our module repositories, I want to ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like provlift to behave? Example commands, flags, output or configuration are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you use today, or other tools and approaches you have tried.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - list
+        - check
+        - drift
+        - upgrade
+        - validate
+        - Configuration (.provlift.yaml)
+        - Registry / authentication
+        - OpenTofu support
+        - CI workflows / pull requests
+        - Documentation
+        - Other
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to open a pull request for this.

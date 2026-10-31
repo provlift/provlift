@@ -1,0 +1,194 @@
+---
+import '../styles/global.css';
+
+const commands = [
+  { name: 'list', label: 'Inventory', tone: 'offline', description: 'Show every required provider, module kind, source address, constraint, lock state, and declaration location.', behavior: 'Read-only. Does not need Terraform or registry access.', flags: ['--provider', '--roots-only', '--show-ignored'], examples: ['provlift list', 'provlift list --provider aws --roots-only', 'provlift list --json'] },
+  { name: 'check', label: 'Registry scan', tone: 'network', description: 'Compare locked versions or constraint floors with published provider releases and identify repository or dependency blockers.', behavior: 'Read-only. Exit code 2 can gate CI when upgrades are available.', flags: ['--provider', '--module', '--level', '--exit-code'], examples: ['provlift check', 'provlift check --level patch --exit-code', 'provlift check --provider hashicorp/google --module "platform/*"', 'provlift check --json'] },
+  { name: 'drift', label: 'Consistency', tone: 'offline', description: 'Find provider version skew, constraint divergence, and root modules without lock files.', behavior: 'Offline and read-only. Use it before changing provider versions across a repository.', flags: ['--provider', '--exit-code'], examples: ['provlift drift', 'provlift drift --provider google', 'provlift drift --exit-code', 'provlift drift --json'] },
+  { name: 'upgrade', label: 'Change set', tone: 'writes files', description: 'Plan and apply provider updates, rewrite only blocking constraints, regenerate lock files through Terraform, and validate the result.', behavior: 'Writes Terraform files and lock files. Major or breaking changes require acknowledgement.', flags: ['--provider', '--module', '--level', '--exact-level', '--allow-major', '--next-major', '--to', '--raise-floor', '--pin-unconstrained', '--dry-run', '--skip-init', '--skip-validate', '--backend', '--platforms', '--fmt', '--pr-body'], examples: ['provlift upgrade --level patch --dry-run', 'provlift upgrade --provider aws --level minor', 'provlift upgrade --provider integrations/github --level major --allow-major', 'provlift upgrade --level patch --terraform-binary tofu', 'provlift upgrade --provider azurerm --level major --exact-level --next-major --allow-major', 'provlift upgrade --level patch --exact-level --pr-body body.md --json'] },
+  { name: 'validate', label: 'Safety gate', tone: 'terraform', description: 'Check formatting, initialize roots, validate Terraform configuration, and optionally run a plan.', behavior: 'Runs Terraform. Plan is opt-in and may require backend and cloud credentials.', flags: ['--module', '--plan', '--backend', '--no-init'], examples: ['provlift validate', 'provlift validate --module "envs/*"', 'provlift validate --plan --backend', 'provlift validate --no-init --json'] },
+  { name: 'version', label: 'Build info', tone: 'offline', description: 'Inspect the installed CLI version, commit, build date, Go version, and target platform.', behavior: 'Read-only and offline.', flags: ['--json'], examples: ['provlift version', 'provlift version --json'] },
+];
+
+const workflow = [
+  ['01', 'Discover', 'Inventory modules and provider requirements without touching files.'],
+  ['02', 'Choose a stage', 'Run a direct patch, minor, or major budget, or progress through exact stages.'],
+  ['03', 'Review the PR', 'CI validates the change, explains blockers, and keeps the lock file honest.'],
+];
+
+const flags = [
+  ['-C, --dir', '.', 'Repository directory to scan.'],
+  ['--json', 'false', 'Emit machine-readable output instead of a table.'],
+  ['--exclude', 'none', 'Skip directory globs; repeatable.'],
+  ['--terraform-binary', 'terraform', 'Drive Terraform, or OpenTofu with "tofu" (bare provider sources then resolve to registry.opentofu.org).'],
+  ['--timeout', '15m', 'Timeout for one Terraform command.'],
+  ['--include-prerelease', 'false', 'Include prerelease provider versions in discovery and planning.'],
+  ['--level', 'patch', 'Upgrade budget: patch, minor, or major.'],
+  ['--exact-level', 'false', 'Apply only the selected level for progressive stages.'],
+  ['--allow-major', 'false', 'Acknowledge major or breaking changes.'],
+  ['--next-major', 'false', 'Advance one major series at a time.'],
+  ['--to', 'none', 'Target one exact provider version.'],
+  ['--raise-floor', 'false', 'Raise a shared module minimum to the tested target.'],
+  ['--pin-unconstrained', 'false', 'Add a constraint where none exists.'],
+  ['--dry-run', 'false', 'Show an upgrade plan without changing files.'],
+  ['--skip-init', 'false', 'Edit constraints without regenerating the lock file.'],
+  ['--skip-validate', 'false', 'Skip Terraform validation after upgrade.'],
+  ['--backend', 'false', 'Allow backend initialization and state access.'],
+  ['--platforms', 'config', 'Platforms recorded by terraform providers lock.'],
+  ['--fmt', 'true', 'Run terraform fmt on edited directories.'],
+  ['--pr-body', 'none', 'Write generated pull request markdown to a file.'],
+];
+---
+
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content="Command reference and upgrade workflows for provlift, the open-source provider upgrade CLI for Terraform and OpenTofu." />
+    <title>provlift / CLI reference</title>
+    <link rel="icon" href={`${import.meta.env.BASE_URL}favicon.ico`} sizes="any" />
+    <link rel="icon" href={`${import.meta.env.BASE_URL}favicon.svg`} type="image/svg+xml" />
+    <link rel="apple-touch-icon" href={`${import.meta.env.BASE_URL}apple-touch-icon-180.png`} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="#top"><span class="brand-mark">pl</span><span>provlift docs</span></a>
+        <nav aria-label="Documentation navigation">
+          <div class="nav-label">Start here</div>
+          <a class="nav-link active" href="#commands">Command reference</a>
+          <a class="nav-link" href="#workflow">Upgrade workflow</a>
+          <div class="nav-label">Reference</div>
+          <a class="nav-link" href="#flags">Global flags</a>
+          <a class="nav-link" href="#ci">CI / pull requests</a>
+          <div class="nav-label">Links</div>
+          <a class="nav-link" href="https://github.com/provlift/provlift" target="_blank" rel="noreferrer">Source on GitHub ↗</a>
+          <a class="nav-link" href="https://github.com/provlift/provlift/tree/main/docs" target="_blank" rel="noreferrer">Full documentation ↗</a>
+          <a class="nav-link" href="https://github.com/provlift/provlift/blob/main/CONTRIBUTING.md" target="_blank" rel="noreferrer">Contributing ↗</a>
+        </nav>
+        <div class="sidebar-foot">Open source · Apache-2.0<br />Terraform and OpenTofu</div>
+      </aside>
+
+      <main class="main" id="top">
+        <div class="topbar">
+          <div class="eyebrow">Terraform &amp; OpenTofu provider operations</div>
+          <div class="top-actions">
+            <label class="search" aria-label="Search documentation">
+              <span>⌕</span>
+              <input id="search" type="search" placeholder="Search commands or concepts" />
+              <kbd>/</kbd>
+            </label>
+            <a class="text-link" href="https://github.com/provlift/provlift/releases" target="_blank" rel="noreferrer">releases ↗</a>
+          </div>
+        </div>
+        <div class="search-feedback" id="search-feedback" aria-live="polite">
+          <strong id="search-count">Showing all documentation</strong>
+          <div class="search-results" id="search-results"></div>
+        </div>
+
+        <section class="hero">
+          <div>
+            <div class="eyebrow">The provider upgrade CLI</div>
+            <h1>Make provider upgrades <span>reviewable.</span></h1>
+            <p class="hero-copy">Inventory providers across every module, see what the registry allows, and ship a precise upgrade PR without hand-editing lock files. Works with any provider in any registry: AWS, AzureRM, Google, GitHub, Kubernetes, and your private ones.</p>
+          </div>
+          <div class="hero-note">
+            <strong>Two ways to move</strong>
+            <p>Choose a direct patch, minor, or major budget. Or use exact stages to progress patch → minor → major with one reviewable PR at a time.</p>
+          </div>
+        </section>
+
+        <section class="section" id="commands">
+          <div class="section-heading">
+            <div><div class="eyebrow">01 / Commands</div><h2>Find the right command</h2><p class="section-intro">The fast path through the CLI. Search this page to jump straight to an operation.</p></div>
+          </div>
+          <div class="command-grid" id="command-grid">
+            {commands.map((command) => (
+              <article class="command-card searchable" id={`command-${command.name}`} data-result-title={`provlift ${command.name}`} data-search={`${command.name} ${command.label} ${command.description} ${command.behavior} ${command.flags.join(' ')} ${command.examples.join(' ')}`}>
+                <span class="pill">{command.tone}</span>
+                <h3>provlift {command.name}</h3>
+                <p>{command.description}</p>
+                <p class="behavior"><strong>Behavior:</strong> {command.behavior}</p>
+                <div class="subheading">Flags</div>
+                <div class="tag-list">{command.flags.map((flag) => <code>{flag}</code>)}</div>
+                <div class="subheading">Examples</div>
+                <div class="example-list">{command.examples.map((example) => <div class="code-block"><button class="copy" type="button" data-copy={example}>copy</button>{example}</div>)}</div>
+              </article>
+            ))}
+          </div>
+          <div class="no-results" id="no-results">No matching command. Try “upgrade”, “lock”, or “json”.</div>
+        </section>
+
+        <section class="section" id="workflow">
+          <div class="section-heading"><div><div class="eyebrow">02 / Method</div><h2>How an upgrade moves</h2><p class="section-intro">The CLI keeps discovery, planning, editing, and validation visible as separate steps.</p></div></div>
+          <div class="workflow">
+            {workflow.map(([number, title, description]) => <article class="workflow-card"><div class="number">{number}</div><h3>{title}</h3><p>{description}</p></article>)}
+          </div>
+        </section>
+
+        <section class="section" id="flags">
+          <div class="section-heading"><div><div class="eyebrow">03 / Flags</div><h2>Complete flag reference</h2><p class="section-intro">Global and upgrade controls in one searchable table. Command cards above show command-specific examples.</p></div></div>
+          <div class="table-wrap"><table><thead><tr><th>Flag</th><th>Default</th><th>Use it for</th></tr></thead><tbody>{flags.map(([flag, defaultValue, use]) => <tr id={`flag-${flag.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`} class="searchable" data-result-title={`${flag} flag`} data-search={`${flag} ${defaultValue} ${use}`}><td>{flag}</td><td>{defaultValue}</td><td>{use}</td></tr>)}</tbody></table></div>
+        </section>
+
+        <section class="section" id="ci">
+          <div class="section-heading"><div><div class="eyebrow">04 / Automation</div><h2>Pull requests by design</h2><p class="section-intro">CI runs the tool, keeps credentials out of the binary, and turns the result into one focused PR per provider.</p></div></div>
+          <div class="automation-grid">
+            <article class="workflow-card searchable" data-result-title="Direct budget workflow" data-search="direct budget patch minor major upgrade"><h3>Direct budget</h3><p>Choose the next release permitted by one budget. `minor` includes patch and minor changes; a planned major requires acknowledgement.</p><div class="code-block"><button class="copy" type="button" data-copy="provlift upgrade --provider aws --level minor --json">copy</button>provlift upgrade --provider aws --level minor --json</div></article>
+            <article class="workflow-card searchable" data-result-title="Progressive stages workflow" data-search="progressive exact level patch minor major next major"><h3>Progressive stages</h3><p>Keep patch, minor, and major changes in separate reviewable PRs. Use `--next-major` when crossing multiple major series.</p><div class="code-block"><button class="copy" type="button" data-copy="provlift upgrade --provider azurerm --level major --exact-level --next-major --allow-major">copy</button>provlift upgrade --provider azurerm --level major --exact-level --next-major --allow-major</div></article>
+            <article class="workflow-card searchable" data-result-title="Pull request metadata workflow" data-search="pull request json pr body ci"><h3>PR metadata</h3><p>CI can consume the stable JSON shape and generated markdown without giving the CLI forge credentials.</p><div class="code-block"><button class="copy" type="button" data-copy="provlift upgrade --level patch --exact-level --pr-body body.md --json">copy</button>provlift upgrade --level patch --exact-level --pr-body body.md --json</div></article>
+          </div>
+        </section>
+
+        <footer><span>provlift · Apache-2.0 · <a href="https://github.com/provlift/provlift" target="_blank" rel="noreferrer">github.com/provlift/provlift</a></span><span>docs built for scanning, not wandering</span></footer>
+      </main>
+    </div>
+
+    <script>
+      const search = document.querySelector('#search');
+      const cards = [...document.querySelectorAll('.searchable')];
+      const noResults = document.querySelector('#no-results');
+      const searchCount = document.querySelector('#search-count');
+      const searchResults = document.querySelector('#search-results');
+      search?.addEventListener('input', (event) => {
+        const input = event.currentTarget;
+        if (!(input instanceof HTMLInputElement)) return;
+        const query = input.value.toLowerCase().trim();
+        let visible = 0;
+        const matches: HTMLElement[] = [];
+        cards.forEach((item) => {
+          const element = item as HTMLElement;
+          const match = !query || (element.dataset.search ?? '').toLowerCase().includes(query);
+          element.style.display = match ? '' : 'none';
+          if (match) {
+            visible++;
+            if (query) matches.push(element);
+          }
+        });
+        if (noResults instanceof HTMLElement) noResults.style.display = visible ? 'none' : 'block';
+        if (searchCount instanceof HTMLElement) {
+          searchCount.textContent = query ? `${visible} result${visible === 1 ? '' : 's'} for “${input.value}”` : 'Showing all documentation';
+        }
+        if (searchResults instanceof HTMLElement) {
+          searchResults.innerHTML = matches.slice(0, 8).map((element) => `<a href="#${element.id}">${element.dataset.resultTitle ?? 'Documentation result'}</a>`).join('');
+          searchResults.style.display = query && matches.length ? 'flex' : 'none';
+        }
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === '/' && document.activeElement !== search) { event.preventDefault(); if (search instanceof HTMLInputElement) search.focus(); }
+      });
+      document.querySelectorAll('[data-copy]').forEach((button) => {
+        if (!(button instanceof HTMLButtonElement)) return;
+        button.addEventListener('click', async () => {
+          await navigator.clipboard.writeText(button.dataset.copy ?? '');
+          const original = button.textContent;
+          button.textContent = 'copied';
+          setTimeout(() => { button.textContent = original; }, 1200);
+        });
+      });
+    </script>
+  </body>
+</html>

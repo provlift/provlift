@@ -1,0 +1,373 @@
+# Provider compatibility for a *shared module* repository
+# (for example terraform-aws-network or terraform-google-bucket)
+#
+# Copy this into a module repository as
+# .github/workflows/provider-compatibility.yml and tell it which provider the
+# module is built on: set the repository variable PROVLIFT_PROVIDER (for
+# example hashicorp/aws, hashicorp/google, integrations/github), or pass the
+# provider input on a manual run. A manual input overrides the variable.
+#
+# This is deliberately NOT the same workflow as provider-upgrades.yml. A
+# shared module is not a root configuration, and the Dependabot-shaped
+# "upgrade the dependency" question does not apply to it:
+#
+#   * Its lock file is gitignored, and rightly so - the lock belongs to the
+#     root configuration that consumes the module, not to the module.
+#   * Its constraints are open lower bounds (">= 3.85.0"), which already
+#     permit every newer release. There is nothing to bump.
+#
+# So a plain upgrade job copied from a root-config repository would raise an
+# empty pull request every week, forever.
+#
+# The two questions worth asking of a module are different:
+#
+#   1. Does it still work with the newest provider?  -> a status check.
+#   2. Does it forbid the newest provider?           -> a pull request.
+#
+# (2) is the one that matters to everyone else. A ceiling such as
+# "<= 4.19.0" inside a widely-consumed module caps the provider for every
+# repository downstream of it, and no amount of work in those repositories can
+# lift it. This workflow proves the module works at the newer version and then
+# opens the pull request that widens the ceiling.
+
+name: Provider compatibility
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: >-
+          Provider source to test, e.g. hashicorp/aws or
+          registry.terraform.io/hashicorp/google. Defaults to the
+          PROVLIFT_PROVIDER repository variable.
+        type: string
+        default: ""
+      level:
+        description: Highest provider level to test against
+        type: choice
+        options: [patch, minor, major]
+        default: minor
+      target_version:
+        description: Optional exact provider version to validate
+        type: string
+        default: ""
+      allow_major:
+        description: Acknowledge that major upgrades may contain breaking changes
+        type: boolean
+        default: false
+      raise_floor:
+        description: >-
+          Also raise the minimum supported version. This is a BREAKING change
+          for consumers still on older providers and requires a major release
+          of this module.
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  PROVLIFT_VERSION: ${{ vars.PROVLIFT_VERSION || 'v0.1.0' }} # x-release-please-version
+  GO_VERSION: "1.26"
+  # Free-form, so it reaches the shell only through the environment and is
+  # validated before use.
+  PROVIDER: ${{ inputs.provider || vars.PROVLIFT_PROVIDER }}
+  # The directories that make up the module's compatibility surface. Leave out
+  # anything with its own lifecycle, such as a state bootstrap directory.
+  MODULES: ".,example,examples/*"
+
+jobs:
+  compatibility:
+    name: ${{ inputs.provider || vars.PROVLIFT_PROVIDER || 'provider' }} ${{ inputs.level || 'minor' }}
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.attempt.outputs.changed }}
+      branch: ${{ steps.attempt.outputs.branch }}
+      title: ${{ steps.attempt.outputs.title }}
+      labels: ${{ steps.attempt.outputs.labels }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Install provlift
+        run: |
+          set -euo pipefail
+          # A tag is immutable; a branch such as main changes under you.
+          if [[ ! "$PROVLIFT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::PROVLIFT_VERSION must be a release tag such as v1.2.3, not '$PROVLIFT_VERSION'."
+            exit 1
+          fi
+          go install github.com/provlift/provlift/cmd/provlift@"$PROVLIFT_VERSION"
+
+      # A ceiling declared inside a module this repository consumes is
+      # invisible until that module is on disk. Without this step the ceiling
+      # is misattributed to this repository's own constraint and the module
+      # actually responsible is never named.
+      #
+      # `terraform get` fetches the module tree only, not providers, so this
+      # is cheap and needs no cloud credentials.
+      - name: Vendor the module tree
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra mods <<< "$MODULES"
+          for pattern in "${mods[@]}"; do
+            for dir in $pattern; do
+              if compgen -G "$dir/*.tf" > /dev/null; then
+                echo "::group::terraform get $dir"
+                (cd "$dir" && terraform get)
+                echo "::endgroup::"
+              fi
+            done
+          done
+
+      - name: Report the current position
+        run: |
+          {
+            echo '## Provider position'
+            echo
+            echo '```'
+            provlift check 2>&1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The most useful thing this workflow can say is often "you cannot fix
+      # this here". A ceiling in a shared module caps every repository
+      # downstream of it, so the fix belongs upstream and the upstream module
+      # has to be named for anyone to act on it.
+      - name: Name any upstream blocker
+        run: |
+          set -euo pipefail
+          provlift check --json > "$RUNNER_TEMP/check.json"
+          jq -r '
+            .providers[]
+            | select(.blocked_by_dependency)
+            | "::warning title=Provider capped upstream::\(.source) in \(.module) cannot go above \(.latest_reachable) (\(.latest) is published). Imposed by: \((.external_sources // ["an unidentified dependency"]) | join(", ")). Release those modules with a wider ceiling first."
+          ' "$RUNNER_TEMP/check.json"
+
+      # Fail loudly on a missing or mistyped provider. Otherwise the plan below
+      # is empty and the run goes green without having tested anything.
+      - id: provider
+        name: Resolve the provider
+        run: |
+          set -euo pipefail
+          provider="${PROVIDER:-}"
+          if [ -z "$provider" ]; then
+            echo "::error::No provider selected. Set the PROVLIFT_PROVIDER repository variable or the provider input, e.g. hashicorp/aws."
+            exit 1
+          fi
+          if [[ ! "$provider" =~ ^([A-Za-z0-9.-]+/)?[A-Za-z0-9-]+/[A-Za-z0-9-]+$ ]]; then
+            echo "::error::provider must be namespace/type or hostname/namespace/type, e.g. hashicorp/aws."
+            exit 1
+          fi
+          source="$provider"
+          if [[ "$source" != */*/* ]]; then source="registry.terraform.io/$source"; fi
+          source="${source,,}"
+          jq -e --arg source "$source" 'any(.providers[]?; (.source | ascii_downcase) == $source)' \
+            "$RUNNER_TEMP/check.json" > /dev/null || {
+            echo "::error::$provider is not declared by any module in this repository."
+            exit 1
+          }
+          echo "PROVIDER_SOURCE=$source" >> "$GITHUB_ENV"
+
+      - id: attempt
+        name: Validate against the newest ${{ inputs.provider || vars.PROVLIFT_PROVIDER || 'provider' }}
+        env:
+          PROVLIFT_TARGET_VERSION: ${{ inputs.target_version }}
+        run: |
+          set -euo pipefail
+          level="${{ inputs.level || 'minor' }}"
+          target_version="${PROVLIFT_TARGET_VERSION:-}"
+          allow_major="${{ inputs.allow_major || 'false' }}"
+
+          if [ -n "$target_version" ] && [[ ! "$target_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::target_version must be a semantic version such as 5.6.0."
+            exit 1
+          fi
+
+          if [ "$level" = "major" ] && [ "$allow_major" != "true" ]; then
+            echo "::error::level=major requires allow_major before testing an upgrade."
+            exit 1
+          fi
+
+          args=(
+            --provider "$PROVIDER_SOURCE"
+            --level "$level"
+            --pr-body "$RUNNER_TEMP/pr-body.md"
+            --json
+          )
+          if [ -z "$target_version" ]; then args+=(--exact-level); fi
+          if [ -n "$target_version" ]; then args+=(--to "$target_version"); fi
+          IFS=',' read -ra mods <<< "$MODULES"
+          for m in "${mods[@]}"; do args+=(--module "$m"); done
+
+          if [ "$allow_major" = "true" ]; then args+=(--allow-major); fi
+          if [ "$level" = "major" ] && [ -z "$target_version" ]; then args+=(--next-major); fi
+          if [ "${{ inputs.raise_floor || 'false' }}" = "true" ]; then args+=(--raise-floor); fi
+
+          # The constraint is rewritten only where it would otherwise block the
+          # target, so a module with an open lower bound comes through this
+          # unchanged and simply gets validated. A module with a ceiling gets
+          # the ceiling widened - and Terraform then proves whether that was
+          # safe to do.
+          provlift upgrade "${args[@]}" > "$RUNNER_TEMP/result.json"
+
+          if [ -n "$target_version" ]; then
+            rejected_skips=$(jq -r --arg target "$target_version" '
+              [.plan.skipped[]?
+               | select(.reason | startswith($target + " is not newer than the current version ") | not)
+               | "\(.module): \(.reason)"]
+              | join("\n")
+            ' "$RUNNER_TEMP/result.json")
+            if [ -n "$rejected_skips" ]; then
+              echo "::error::explicit target $target_version was skipped by the requested level or provider policy: $rejected_skips"
+              exit 1
+            fi
+          fi
+
+          jq '.terraform_runs' "$RUNNER_TEMP/result.json"
+          jq -e 'all(.terraform_runs[]; .ok)' "$RUNNER_TEMP/result.json" > /dev/null || {
+            echo "::error::the module does not validate against the newer $PROVIDER_SOURCE; the constraint is correct as it stands"
+            exit 1
+          }
+
+          if [ -n "$target_version" ]; then
+            validate_exact_target() (
+              set -euo pipefail
+              module_dir="$1"
+              override="$module_dir/provlift_compatibility_override.tf"
+              lock_file="$module_dir/.terraform.lock.hcl"
+              if [ -e "$override" ]; then
+                echo "::error::temporary compatibility override already exists in $module_dir"
+                exit 1
+              fi
+              lock_backup="$(mktemp)"
+              had_lock=false
+              if [ -f "$lock_file" ]; then
+                cp "$lock_file" "$lock_backup"
+                had_lock=true
+              fi
+              # shellcheck disable=SC2317 # invoked by the EXIT trap
+              cleanup() {
+                rm -f "$override"
+                if [ "$had_lock" = "true" ]; then
+                  cp "$lock_backup" "$lock_file"
+                else
+                  rm -f "$lock_file"
+                fi
+                rm -f "$lock_backup"
+              }
+              trap cleanup EXIT
+              inventory="$(provlift list --dir "$module_dir" --json --roots-only)"
+              {
+                echo 'terraform {'
+                echo '  required_providers {'
+                printf '    provlift-compat-target = { source = "%s", version = "= %s" }\n' "$PROVIDER_SOURCE" "$target_version"
+                # init -upgrade would otherwise reselect providers away from the restored lock.
+                jq -r --arg source "$PROVIDER_SOURCE" '
+                  [.providers[]?
+                   | select(.module == "." and .is_root and (.locked // "") != ""
+                            and .source != $source)]
+                  | unique_by(.source) | to_entries[]
+                  | "    provlift-compat-\(.key) = { source = \"\(.value.source)\", version = \"= \(.value.locked)\" }"
+                ' <<< "$inventory"
+                echo '  }'
+                echo '}'
+              } > "$override"
+              echo "::group::Validate $PROVIDER_SOURCE $target_version in $module_dir"
+              (cd "$module_dir" && terraform init -upgrade -input=false -no-color -backend=false)
+              selected="$(provlift list --dir "$module_dir" --json --roots-only --provider "$PROVIDER_SOURCE")"
+              jq -e --arg target "$target_version" --arg source "$PROVIDER_SOURCE" '
+                [.providers[]? | select(.module == "." and .is_root and .source == $source)] as $providers
+                | ($providers | length) > 0 and all($providers[]; .locked == $target)
+              ' <<< "$selected" > /dev/null || {
+                echo "::error::Terraform did not select $PROVIDER_SOURCE $target_version in $module_dir; provlift inventory follows"
+                echo "$selected" >&2
+                exit 1
+              }
+              (cd "$module_dir" && terraform validate -no-color)
+              echo "::endgroup::"
+            )
+
+            validated_roots=0
+            IFS=',' read -ra selected_modules <<< "$MODULES"
+            for pattern in "${selected_modules[@]}"; do
+              for module_dir in $pattern; do
+                [ -d "$module_dir" ] || continue
+                compgen -G "$module_dir/*.tf" > /dev/null || continue
+                requirements="$(provlift list --dir "$module_dir" --json --roots-only --provider "$PROVIDER_SOURCE")"
+                has_provider="$(jq --arg source "$PROVIDER_SOURCE" '[.providers[]? | select(.module == "." and .is_root and .source == $source)] | length > 0' <<< "$requirements")"
+                [ "$has_provider" = "true" ] || continue
+                validated_roots=$((validated_roots + 1))
+                if jq -e --arg target "$target_version" --arg source "$PROVIDER_SOURCE" '
+                  [.providers[]? | select(.module == "." and .is_root and .source == $source)] as $providers
+                  | ($providers | length) > 0 and all($providers[]; .locked == $target)
+                ' <<< "$requirements" > /dev/null &&
+                  jq -e --arg module "$module_dir" 'any(.terraform_runs[]?; .module == $module and .command == "validate" and .ok)' "$RUNNER_TEMP/result.json" > /dev/null; then
+                  continue
+                fi
+                validate_exact_target "$module_dir"
+              done
+            done
+            if [ "$validated_roots" -eq 0 ]; then
+              echo "::error::no selected root module declares $PROVIDER_SOURCE"
+              exit 1
+            fi
+            echo "Validated $PROVIDER_SOURCE $target_version in $validated_roots selected root module(s)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          changed=$(jq '[.plan.actions[]? | select(.constraint.changed)] | length' "$RUNNER_TEMP/result.json")
+          {
+            echo "changed=$changed"
+            jq -r '"branch=" + .pull_request.branch' "$RUNNER_TEMP/result.json"
+            jq -r '"title="  + .pull_request.title'  "$RUNNER_TEMP/result.json"
+            jq -r '"labels=" + (.pull_request.labels | join(","))' "$RUNNER_TEMP/result.json"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$changed" = "0" ]; then
+            if jq -e --arg source "$PROVIDER_SOURCE" 'any(.providers[]?; .blocked_by_dependency and .source == $source)' "$RUNNER_TEMP/check.json" > /dev/null; then
+              echo "Nothing can be changed here: a module this repository consumes caps the provider. See the warnings above." \
+                >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "The declared constraints already permit this version, and the module validates against it. Nothing to change." \
+                >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            cat "$RUNNER_TEMP/pr-body.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Discard Terraform working directories
+        run: find . -type d -name .terraform -prune -exec rm -rf {} +
+
+      - name: Note the consumer impact
+        if: steps.attempt.outputs.changed != '0' && inputs.raise_floor
+        run: |
+          {
+            echo
+            echo '> **This is a breaking change for consumers.** Raising the minimum'
+            echo '> supported provider version excludes every configuration still on an'
+            echo '> older one. Release this module as a new major version.'
+          } >> "$RUNNER_TEMP/pr-body.md"
+
+      - uses: peter-evans/create-pull-request@v6
+        if: steps.attempt.outputs.changed != '0'
+        with:
+          branch: ${{ steps.attempt.outputs.branch }}
+          title: ${{ steps.attempt.outputs.title }}
+          body-path: ${{ runner.temp }}/pr-body.md
+          labels: ${{ steps.attempt.outputs.labels }}
+          commit-message: |
+            ${{ steps.attempt.outputs.title }}
+
+            Validated with terraform init and validate before raising.
+            Raised by provlift.
+          delete-branch: true

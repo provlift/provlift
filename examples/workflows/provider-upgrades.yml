@@ -1,0 +1,203 @@
+# Opens one pull request per Terraform provider that has an upgrade available.
+#
+# Copy this into a Terraform repository as
+# .github/workflows/provider-upgrades.yml
+#
+# provlift performs the upgrade and writes the pull request description; the
+# pull request itself is raised by create-pull-request, so no credentials are
+# ever handled by the tool.
+
+name: Terraform provider upgrades
+
+on:
+  schedule:
+    # Monday morning, before the working week starts.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      level:
+        description: Upgrade stage to run (auto progresses patch, minor, major)
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+      allow_major:
+        description: Acknowledge that major upgrades may contain breaking changes
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  PROVLIFT_VERSION: ${{ vars.PROVLIFT_VERSION || 'v0.1.0' }} # x-release-please-version
+  GO_VERSION: "1.26"
+
+jobs:
+  discover:
+    name: Find available upgrades
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      found: ${{ steps.plan.outputs.found }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # No Terraform here: planning is read-only and talks only to the
+      # provider registry.
+      - name: Install provlift
+        run: |
+          set -euo pipefail
+          # A tag is immutable; a branch such as main changes under you.
+          if [[ ! "$PROVLIFT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::PROVLIFT_VERSION must be a release tag such as v1.2.3, not '$PROVLIFT_VERSION'."
+            exit 1
+          fi
+          go install github.com/provlift/provlift/cmd/provlift@"$PROVLIFT_VERSION"
+
+      - id: plan
+        name: Build the upgrade matrix
+        run: |
+          set -euo pipefail
+          requested="${{ inputs.level || 'auto' }}"
+          allow_major="${{ inputs.allow_major || 'false' }}"
+
+          if [ "$requested" = "major" ] && [ "$allow_major" != "true" ]; then
+            echo "::error::level=major also requires allow_major, which records that breaking changes are expected."
+            exit 1
+          fi
+
+          # Ask the planner rather than re-deriving the decision here. It is
+          # the planner that knows about dependency ceilings, so a provider
+          # sitting at a version its consumers cap it to is correctly absent
+          # from the matrix and no empty pull request is raised.
+          level="$requested"
+          if [ "$requested" = "auto" ]; then
+            level="none"
+            for candidate in patch minor major; do
+              args=(--dry-run --json --level "$candidate" --exact-level)
+              if [ "$candidate" = "major" ] && [ "$allow_major" = "true" ]; then args+=(--allow-major --next-major); fi
+              if [ "$candidate" = "major" ] && [ "$allow_major" != "true" ]; then
+                continue
+              fi
+              provlift upgrade "${args[@]}" > "$RUNNER_TEMP/plan-$candidate.json"
+              if jq -e '(.plan.actions // []) | length > 0' "$RUNNER_TEMP/plan-$candidate.json" > /dev/null; then
+                level="$candidate"
+                cp "$RUNNER_TEMP/plan-$candidate.json" "$RUNNER_TEMP/plan.json"
+                break
+              fi
+            done
+            if [ "$level" = "none" ]; then
+              cp "$RUNNER_TEMP/plan-minor.json" "$RUNNER_TEMP/plan.json"
+            fi
+          else
+            args=(--dry-run --json --level "$level" --exact-level)
+            if [ "$allow_major" = "true" ]; then args+=(--allow-major); fi
+            if [ "$level" = "major" ]; then args+=(--next-major); fi
+            provlift upgrade "${args[@]}" > "$RUNNER_TEMP/plan.json"
+          fi
+          echo "Selected upgrade stage: $level"
+
+          matrix=$(jq -c --arg level "$level" '
+            [(.plan.actions // [])[].source]
+            | unique
+            | map({provider: ., level: $level})
+            | {include: .}
+          ' "$RUNNER_TEMP/plan.json")
+
+          count=$(jq '.include | length' <<<"$matrix")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "found=$([ "$count" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "Providers with an upgrade to raise: $count"
+
+          # Surface the reasons so a run that raises nothing is still
+          # explicable from the job log.
+          jq -r '.plan.skipped[]? | "skipped \(.module) \(.source): \(.reason)"' "$RUNNER_TEMP/plan.json"
+
+  upgrade:
+    name: ${{ matrix.provider }}
+    needs: discover
+    if: needs.discover.outputs.found == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      # One provider failing must not stop the others being raised.
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # The wrapper intercepts stdout, which provlift parses.
+          terraform_wrapper: false
+
+      - name: Install provlift
+        run: |
+          set -euo pipefail
+          # A tag is immutable; a branch such as main changes under you.
+          if [[ ! "$PROVLIFT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::PROVLIFT_VERSION must be a release tag such as v1.2.3, not '$PROVLIFT_VERSION'."
+            exit 1
+          fi
+          go install github.com/provlift/provlift/cmd/provlift@"$PROVLIFT_VERSION"
+
+      - id: upgrade
+        name: Upgrade ${{ matrix.provider }}
+        run: |
+          set -euo pipefail
+
+          args=(
+            --provider "${{ matrix.provider }}"
+            --level "${{ matrix.level }}"
+            --exact-level
+            --pr-body "$RUNNER_TEMP/pr-body.md"
+            --json
+          )
+          if [ "${{ matrix.level }}" = "major" ] && [ "${{ inputs.allow_major || 'false' }}" != "true" ]; then
+            echo "::error::level=major requires allow_major before applying an upgrade."
+            exit 1
+          fi
+          if [ "${{ inputs.allow_major || 'false' }}" = "true" ]; then
+            args+=(--allow-major)
+          fi
+          if [ "${{ matrix.level }}" = "major" ]; then
+            args+=(--next-major)
+          fi
+
+          # Artefacts go to the runner's temp directory so they are never
+          # picked up as repository changes.
+          provlift upgrade "${args[@]}" > "$RUNNER_TEMP/result.json"
+
+          {
+            jq -r '"has_changes=" + (((.plan.actions // []) | length > 0) and ((.changed_files // []) | length > 0) | tostring)' "$RUNNER_TEMP/result.json"
+            jq -r '"branch=" + .pull_request.branch' "$RUNNER_TEMP/result.json"
+            jq -r '"title=" + .pull_request.title'  "$RUNNER_TEMP/result.json"
+            jq -r '"labels=" + (.pull_request.labels | join(","))' "$RUNNER_TEMP/result.json"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Discard Terraform working directories
+        run: find . -type d -name .terraform -prune -exec rm -rf {} +
+
+      - uses: peter-evans/create-pull-request@v6
+        if: steps.upgrade.outputs.has_changes == 'true'
+        with:
+          # The branch is derived from the target version, so a re-run updates
+          # the open pull request rather than opening another.
+          branch: ${{ steps.upgrade.outputs.branch }}
+          title: ${{ steps.upgrade.outputs.title }}
+          body-path: ${{ runner.temp }}/pr-body.md
+          labels: ${{ steps.upgrade.outputs.labels }}
+          commit-message: |
+            ${{ steps.upgrade.outputs.title }}
+
+            Raised by provlift.
+          delete-branch: true
