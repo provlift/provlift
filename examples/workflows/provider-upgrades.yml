@@ -30,7 +30,7 @@ permissions:
   pull-requests: write
 
 env:
-  PROVLIFT_VERSION: ${{ vars.PROVLIFT_VERSION || 'v0.1.2' }} # x-release-please-version
+  PROVLIFT_VERSION: ${{ vars.PROVLIFT_VERSION || 'v0.1.3' }} # x-release-please-version
   GO_VERSION: "1.26"
 
 jobs:
