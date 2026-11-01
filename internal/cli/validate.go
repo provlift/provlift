@@ -129,11 +129,13 @@ func applyTerraform(ctx context.Context, g *globalOptions, ws *workspace, plan *
 	}
 
 	if opts.runFmt {
-		// Only directories that were actually edited are formatted. Running fmt
-		// elsewhere could pull unrelated pre-existing drift into the diff.
+		// Only the files that were actually edited are formatted. A recursive
+		// fmt of their directories would also rewrite pre-existing drift in
+		// sibling files and nested modules, pulling unrelated changes into
+		// the diff.
 		for _, dir := range editedDirs(changedFiles) {
 			announce(relTo(ws.root, dir), "fmt")
-			res, err := runner.Fmt(ctx, dir)
+			res, err := runner.Fmt(ctx, dir, editedFileNames(changedFiles, dir)...)
 			if err != nil {
 				return runs, err
 			}
@@ -324,6 +326,18 @@ func restoreOriginalLock(root *model.Module, original []byte, hadLock bool) erro
 		return nil
 	}
 	return err
+}
+
+// editedFileNames returns the base names of the given files that live in dir,
+// so fmt can be pointed at exactly the files that were edited.
+func editedFileNames(files []string, dir string) []string {
+	var out []string
+	for _, f := range files {
+		if filepath.Dir(f) == dir {
+			out = append(out, filepath.Base(f))
+		}
+	}
+	return out
 }
 
 // editedDirs returns the distinct directories containing the given files.
