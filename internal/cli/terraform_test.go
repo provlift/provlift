@@ -565,6 +565,52 @@ func TestUpgradeNoFmtFlag(t *testing.T) {
 	}
 }
 
+func TestUpgradeFmtTargetsEditedFilesOnly(t *testing.T) {
+	h := newHarness(t, map[string]string{
+		// Pre-existing drift in a sibling file and in a nested module must not
+		// be pulled into the upgrade diff by the post-edit fmt step.
+		"drift.tf":            "variable \"drift\" {\n  type = string\n}\n",
+		"modules/net/vars.tf": "variable \"net_cidr\" {\n  default = \"a\"\n}\n",
+	})
+	logPath := useFakeTerraform(t, h)
+
+	err := h.run(t, newUpgradeCommand(h.opts),
+		"--provider", "azurerm", "--to", "5.6.0", "--level", "major", "--allow-major")
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+
+	var fmtCalls []string
+	for _, c := range readInvocations(t, logPath) {
+		if strings.Contains(c, "\tfmt") {
+			fmtCalls = append(fmtCalls, c)
+		}
+	}
+	if len(fmtCalls) != 1 {
+		t.Fatalf("expected one fmt invocation, got %d:\n%s", len(fmtCalls), strings.Join(fmtCalls, "\n"))
+	}
+	if strings.Contains(fmtCalls[0], "-recursive") {
+		t.Errorf("post-edit fmt must not recurse into nested modules: %q", fmtCalls[0])
+	}
+	if !strings.Contains(fmtCalls[0], " main.tf") {
+		t.Errorf("fmt must target the edited file: %q", fmtCalls[0])
+	}
+	for _, untouched := range []string{"drift.tf", "vars.tf", "modules"} {
+		if strings.Contains(fmtCalls[0], untouched) {
+			t.Errorf("fmt must not target unedited %s: %q", untouched, fmtCalls[0])
+		}
+	}
+
+	// The unformatted file in the nested module is byte-identical afterwards.
+	got, err := os.ReadFile(filepath.Join(h.dir, "modules", "net", "vars.tf"))
+	if err != nil {
+		t.Fatalf("reading nested module file: %v", err)
+	}
+	if want := "variable \"net_cidr\" {\n  default = \"a\"\n}\n"; string(got) != want {
+		t.Errorf("nested module file was rewritten:\n%s", got)
+	}
+}
+
 func TestValidateCommandRunsFmtCheckAndValidate(t *testing.T) {
 	h := newHarness(t, nil)
 	logPath := useFakeTerraform(t, h)
