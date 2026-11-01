@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.3](https://github.com/provlift/provlift/compare/v0.1.2...v0.1.3) (2026-11-01)
+
+
+### Bug Fixes
+
+* **terraform:** pass fmt file names as ./-prefixed paths ([#71](https://github.com/provlift/provlift/issues/71)) ([493d5ef](https://github.com/provlift/provlift/commit/493d5ef5c8d83a39a57482cef2917921ecc1fa7d))
+* **upgrade:** format only the edited files after an upgrade ([#68](https://github.com/provlift/provlift/issues/68)) ([db55311](https://github.com/provlift/provlift/commit/db55311dbc19c4bc3a5fc063bf9f83d26d8bb5e0)), closes [#16](https://github.com/provlift/provlift/issues/16)
+
 ## [0.1.2](https://github.com/provlift/provlift/compare/v0.1.1...v0.1.2) (2026-10-31)
 
 
