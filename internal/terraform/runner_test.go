@@ -173,6 +173,16 @@ func TestFmtCommands(t *testing.T) {
 	if strings.Contains(write.Stdout, "-check") {
 		t.Errorf("fmt must not be called with -check when rewriting: %q", write.Stdout)
 	}
+
+	// A file name that starts with "-" must reach terraform as a path, not
+	// as a flag.
+	named, err := fakeRunner(t, "echo-args").Fmt(ctx, dir, "main.tf", "-diff.tf")
+	if err != nil {
+		t.Fatalf("Fmt with names: %v", err)
+	}
+	if !strings.Contains(named.Stdout, "./main.tf") || !strings.Contains(named.Stdout, "./-diff.tf") {
+		t.Errorf("fmt file arguments must be ./-prefixed: %q", named.Stdout)
+	}
 }
 
 func TestValidateParsesDiagnostics(t *testing.T) {

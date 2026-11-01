@@ -176,11 +176,17 @@ func (r *Runner) FmtCheck(ctx context.Context, dir string) (Result, error) {
 }
 
 // Fmt rewrites the named files into canonical form, which tidies constraints
-// this tool inserted. The names are passed straight to terraform fmt: without
-// -recursive or a directory-wide target, pre-existing drift in sibling files
-// and nested modules stays out of the diff.
+// this tool inserted. Names are file names within dir. Without -recursive or a
+// directory-wide target, pre-existing drift in sibling files and nested
+// modules stays out of the diff.
 func (r *Runner) Fmt(ctx context.Context, dir string, names ...string) (Result, error) {
-	return r.run(ctx, dir, append([]string{"fmt", "-no-color"}, names...)...)
+	args := []string{"fmt", "-no-color"}
+	for _, name := range names {
+		// The "./" prefix keeps a file name starting with "-" from being read
+		// as a flag.
+		args = append(args, "./"+name)
+	}
+	return r.run(ctx, dir, args...)
 }
 
 // ValidationDiagnostic is one entry from `terraform validate -json`.
