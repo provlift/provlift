@@ -592,7 +592,7 @@ func TestUpgradeFmtTargetsEditedFilesOnly(t *testing.T) {
 	if strings.Contains(fmtCalls[0], "-recursive") {
 		t.Errorf("post-edit fmt must not recurse into nested modules: %q", fmtCalls[0])
 	}
-	if !strings.Contains(fmtCalls[0], " main.tf") {
+	if !strings.Contains(fmtCalls[0], " ./main.tf") {
 		t.Errorf("fmt must target the edited file: %q", fmtCalls[0])
 	}
 	for _, untouched := range []string{"drift.tf", "vars.tf", "modules"} {
