@@ -24,7 +24,8 @@ version string, but provider upgrades have Terraform-specific wrinkles they are
 not designed to handle:
 
 - **Dependency ceilings.** A constraint inside a shared module caps every
-  consumer. `provlift` reads the downloaded module tree, never plans a version
+  consumer. `provlift` reads local shared modules and the downloaded module
+  tree, never plans a version
   a dependency forbids, and names the module that is blocking the upgrade.
 - **Constraint shapes.** `~> 6.0`, `>= 3.85.0`, `>= 3.0, < 4.0` and `= 3.1.0`
   each need a different rewrite — or none at all. `provlift` changes a

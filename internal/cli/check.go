@@ -26,14 +26,44 @@ func collectStatuses(ws *workspace, vs versionSet, selectors, modules []string, 
 			if !selectorsMatch(req.Address, selectors) || ws.cfg.IsIgnored(req.Address) {
 				continue
 			}
-			st := upgrade.BuildStatus(mod, req, vs.Get(req.Address), includePrerelease)
-			applyDependencyConstraints(ws, deps, mod, req, st, vs.Get(req.Address))
-
-			if err := vs.Err(req.Address); err != nil {
-				st.Error = err.Error()
-			}
-			out = append(out, st)
+			out = append(out, buildStatus(ws, deps, vs, mod, req, includePrerelease))
 		}
+	}
+	return out
+}
+
+// buildStatus reconciles one requirement against the registry and against the
+// constraints its dependencies impose.
+func buildStatus(ws *workspace, deps map[string]rootDeps, vs versionSet, mod *model.Module, req model.ProviderRequirement, includePrerelease bool) *upgrade.Status {
+	st := upgrade.BuildStatus(mod, req, vs.Get(req.Address), includePrerelease)
+	applyDependencyConstraints(ws, deps, mod, req, st, vs.Get(req.Address))
+
+	if err := vs.Err(req.Address); err != nil {
+		st.Error = err.Error()
+	}
+	return st
+}
+
+// localConstraintKey identifies one provider requirement of one local module.
+func localConstraintKey(dir string, addr model.Address) string {
+	return dir + "\x00" + addr.String()
+}
+
+// withLocalRewrites returns deps with the given local module constraints
+// replaced, keyed by localConstraintKey, so roots can be judged against the
+// ceilings an upgrade is about to write.
+func withLocalRewrites(deps map[string]rootDeps, rewrites map[string]string) map[string]rootDeps {
+	out := make(map[string]rootDeps, len(deps))
+	for dir, entry := range deps {
+		local := make([]depgraph.Requirement, len(entry.local))
+		for i, r := range entry.local {
+			if constraint, ok := rewrites[localConstraintKey(r.Dir, r.Address)]; ok {
+				r.Constraint = constraint
+			}
+			local[i] = r
+		}
+		entry.local = local
+		out[dir] = entry
 	}
 	return out
 }
@@ -44,15 +74,19 @@ type rootDeps struct {
 	// reqs a complete account of the constraints dependencies impose.
 	vendored bool
 	reqs     []depgraph.Requirement
+
+	// local holds the constraints of the repository modules the root calls.
+	// The scan always knows them, whether or not anything has been vendored.
+	local []depgraph.Requirement
 }
 
-// loadDependencyConstraints reads the modules each root module has vendored.
-// Those declarations are the authoritative source of a provider ceiling that
-// no file in this repository mentions.
+// loadDependencyConstraints reads the modules each root module has vendored,
+// the authoritative source of a provider ceiling that no file in this
+// repository mentions, together with the local modules each root calls.
 func loadDependencyConstraints(ws *workspace) map[string]rootDeps {
 	out := map[string]rootDeps{}
 	for _, root := range ws.inv.RootModules() {
-		entry := rootDeps{}
+		entry := rootDeps{local: depgraph.Local(ws.inv.LocalDescendants(root.Dir))}
 		if depgraph.Vendored(root.Dir) {
 			if reqs, err := depgraph.LoadRegistry(root.Dir, model.DefaultRegistryHost(ws.cfg.Terraform.Binary)); err == nil {
 				entry.vendored = true
@@ -83,32 +117,50 @@ func applyDependencyConstraints(
 	}
 
 	vendored := false
-	var matched []depgraph.Requirement
+	var matched, local []depgraph.Requirement
 	for _, root := range roots {
 		entry := deps[root.Dir]
 		vendored = vendored || entry.vendored
 		matched = append(matched, depgraph.For(entry.reqs, req.Address)...)
+		for _, r := range depgraph.For(entry.local, req.Address) {
+			// A shared module's own declaration is not a ceiling on itself.
+			if r.Dir != mod.Dir {
+				local = append(local, r)
+			}
+		}
 	}
 
-	if len(matched) > 0 {
+	switch {
+	case len(matched) > 0:
 		st.SetExternalConstraint(depgraph.Constraint(matched), candidates)
 		st.ExternalSources = depgraph.Sources(matched)
-		return
-	}
-
-	if vendored {
+	case vendored:
 		// The dependencies are fully known and none constrains this provider.
 		// A lock file may still record constraints from an earlier state of
 		// this repository, which are not a dependency's doing.
 		st.SetExternalConstraint("", candidates)
-		return
+	case st.ExternalConstraint == "":
+		// Nothing vendored: recover what we can from the lock files instead.
+		applyLockConstraints(roots, req, st, candidates)
 	}
 
-	if st.ExternalConstraint != "" {
-		return
+	if len(local) > 0 {
+		// The lock file already folds in every local module's terms, so keep
+		// only what they do not declare before adding them under their names.
+		combined := depgraph.Constraint(local)
+		if rest := upgrade.ExternalConstraint(st.ExternalConstraint, combined); rest != "" {
+			combined += ", " + rest
+		}
+		sources := append(st.ExternalSources, depgraph.Sources(local)...)
+		st.SetExternalConstraint(combined, candidates)
+		st.ExternalSources = sources
 	}
+}
 
-	// Nothing vendored: recover what we can from the lock files instead.
+// applyLockConstraints recovers the terms a root's lock file records beyond its
+// own declaration, the only trace of a dependency's ceiling when nothing has
+// been vendored.
+func applyLockConstraints(roots []*model.Module, req model.ProviderRequirement, st *upgrade.Status, candidates []*version.Version) {
 	seen := map[string]bool{}
 	var terms []string
 	for _, root := range roots {
@@ -257,7 +309,7 @@ Read-only: this command never modifies files.`,
 						}
 						fmt.Fprintf(g.stdout(), "%s %s\n", label, src)
 					}
-					fmt.Fprintf(g.stdout(), "  Release %s with a wider ceiling to lift it.\n",
+					fmt.Fprintf(g.stdout(), "  Widen the ceiling in %s, releasing a new version if it is published, to lift it.\n",
 						pluralModules(len(st.ExternalSources)))
 				}
 

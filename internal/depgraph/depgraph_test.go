@@ -121,6 +121,28 @@ func TestLoadIgnoresLocalModules(t *testing.T) {
 	}
 }
 
+func TestLocalLabelsModulesByRepositoryPath(t *testing.T) {
+	addr := azurerm(t)
+	reqs := Local([]*model.Module{
+		{Dir: "/repo/modules/network", RelDir: "modules/network", Requirements: []model.ProviderRequirement{
+			{Address: addr, Constraint: "< 4.70.0"},
+		}},
+		{Dir: "/repo/modules/bare", RelDir: "modules/bare", Requirements: []model.ProviderRequirement{
+			{Address: addr},
+		}},
+	})
+
+	if len(reqs) != 1 {
+		t.Fatalf("Local() = %+v, want only the module declaring a constraint", reqs)
+	}
+	if got := reqs[0].Label(); got != "modules/network" {
+		t.Errorf("Label() = %q, want the repository path", got)
+	}
+	if reqs[0].Dir != "/repo/modules/network" {
+		t.Errorf("Dir = %q, want the module's directory", reqs[0].Dir)
+	}
+}
+
 func TestLoadSkipsModulesDeclaringNoConstraint(t *testing.T) {
 	root := vendored(t, map[string]string{
 		"bare": "git::https://github.com/acme/mod.git?ref=v1.0.0|",

@@ -37,6 +37,31 @@ type Requirement struct {
 
 	Address    model.Address `json:"-"`
 	Constraint string        `json:"constraint"`
+
+	// Dir is the absolute directory of a module found by the repository scan
+	// rather than vendored, so a module's own declaration is never reported as
+	// a ceiling imposed on itself. It is empty for vendored modules.
+	Dir string `json:"-"`
+}
+
+// Local reports the constraints declared by repository-local modules, keyed by
+// their path relative to the scanned root.
+func Local(modules []*model.Module) []Requirement {
+	var out []Requirement
+	for _, mod := range modules {
+		for _, req := range mod.Requirements {
+			if req.Constraint == "" {
+				continue
+			}
+			out = append(out, Requirement{
+				Module:     mod.RelDir,
+				Address:    req.Address,
+				Constraint: req.Constraint,
+				Dir:        mod.Dir,
+			})
+		}
+	}
+	return out
 }
 
 // Label renders the module and its pinned version for reporting.
@@ -95,7 +120,7 @@ func LoadRegistry(rootDir, registryHost string) ([]Requirement, error) {
 	var out []Requirement
 	for _, entry := range manifest.Modules {
 		// The empty key is the root module itself, and local sources are
-		// already covered by the ordinary scan.
+		// already covered by the ordinary scan (see Local).
 		if entry.Key == "" || isLocalSource(entry.Source) {
 			continue
 		}

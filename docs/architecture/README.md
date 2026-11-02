@@ -116,7 +116,14 @@ Constraints intersect across the whole module tree. A ceiling inside a consumed
 module binds this repository even though nothing here declares it. Reported as
 `BLOCKED = dep`, with the imposing modules named.
 
-**Naming the module requires the module tree to be on disk.** On a fresh
+A shared module inside the repository (a local `source = "../modules/x"`) binds
+every root that calls it, directly or through other local modules, in the same
+way. The repository scan already reads those modules, so their ceilings are
+known and attributed by path on any checkout. When one run also raises a shared
+module's own ceiling, the roots that call it are planned against the ceiling as
+it will stand after the edit.
+
+**Naming a downloaded module requires the module tree to be on disk.** On a fresh
 checkout nothing has been vendored, so provlift falls back to the constraints
 Terraform recorded in `.terraform.lock.hcl`: the ceiling is still reported as
 `BLOCKED = dep`, but without the module that imposes it. Without a lock file the

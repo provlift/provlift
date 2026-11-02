@@ -294,66 +294,114 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 }
 
 func buildPlan(ws *workspace, statuses []*upgrade.Status, vs versionSet, requested upgrade.Level, explicit *version.Version, pin, raiseFloor, nextMajor, exactLevel, includePrerelease bool) (*upgrade.Plan, error) {
-	plan := &upgrade.Plan{}
+	opts := upgrade.PlanOptions{
+		Level:             requested,
+		ExactLevel:        exactLevel,
+		IncludePrerelease: includePrerelease,
+		Explicit:          explicit,
+		PinUnconstrained:  pin,
+		RaiseFloor:        raiseFloor,
+		NextMajorOnly:     nextMajor,
+	}
 
+	// Shared modules are planned before the roots that call them, so that a
+	// ceiling this run raises is judged as it will stand afterwards rather than
+	// reported as blocking the very upgrade that lifts it.
+	planned := map[*upgrade.Status]plannedStatus{}
+	rewrites := map[string]string{}
+	for _, st := range statuses {
+		mod := findModule(ws, st.Module)
+		if mod == nil || mod.IsRoot {
+			continue
+		}
+		result, err := planStatus(ws, mod, st, vs, opts)
+		if err != nil {
+			return nil, err
+		}
+		planned[st] = result
+		if result.action != nil && result.action.Constraint.Changed {
+			rewrites[localConstraintKey(mod.Dir, st.Address)] = result.action.Constraint.New
+		}
+	}
+	var deps map[string]rootDeps
+	if len(rewrites) > 0 {
+		deps = withLocalRewrites(loadDependencyConstraints(ws), rewrites)
+	}
+
+	plan := &upgrade.Plan{}
 	for _, st := range statuses {
 		mod := findModule(ws, st.Module)
 		if mod == nil {
 			continue
 		}
-
-		level := requested
-		if capped, ok := ws.cfg.MaxLevelFor(st.Address); ok {
-			if capped == "none" {
-				plan.Skipped = append(plan.Skipped, upgrade.Skip{
-					Module: st.Module, LocalName: st.LocalName, Source: st.Source, Address: st.Address,
-					Reason: "pinned by .provlift.yaml (max_level: none)",
-				})
-				continue
+		result, done := planned[st]
+		if !done {
+			if deps != nil {
+				st = buildStatus(ws, deps, vs, mod, st.Requirement, includePrerelease)
 			}
-			configured, err := upgrade.ParseLevel(capped)
-			if err != nil {
+			var err error
+			if result, err = planStatus(ws, mod, st, vs, opts); err != nil {
 				return nil, err
 			}
-			if configured < level {
-				level = configured
-			}
 		}
-		if explicit != nil && !containsVersion(vs.Get(st.Address), explicit) && containsPublishedVersion(vs.Published(st.Address), explicit) {
-			return nil, fmt.Errorf("%s is published for %s but does not support the requested platforms", explicit, st.Source)
+		if result.action != nil {
+			plan.Actions = append(plan.Actions, *result.action)
+		} else {
+			plan.Skipped = append(plan.Skipped, result.skip)
 		}
-		if st.Error != "" {
-			return nil, fmt.Errorf("registry lookup failed for %s in %s: %s", st.Source, st.Module, st.Error)
-		}
-		if explicit != nil && !containsVersion(vs.Get(st.Address), explicit) {
-			return nil, fmt.Errorf("%s is not a published version of %s", explicit, st.Source)
-		}
-
-		action, reason, err := upgrade.PlanAction(mod, st, vs.Get(st.Address), upgrade.PlanOptions{
-			Level:             level,
-			ExactLevel:        exactLevel,
-			IncludePrerelease: includePrerelease,
-			Explicit:          explicit,
-			PinUnconstrained:  pin,
-			RaiseFloor:        raiseFloor,
-			NextMajorOnly:     nextMajor,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("planning %s in %s: %w; update the constraint by hand", st.Source, st.Module, err)
-		}
-		if action == nil {
-			// A child module that needs no constraint edit has nothing of its
-			// own to refresh: the roots that call it own the lock files, and
-			// they are planned from their own requirements.
-			plan.Skipped = append(plan.Skipped, upgrade.Skip{
-				Module: st.Module, LocalName: st.LocalName, Source: st.Source, Address: st.Address,
-				Reason: reason,
-			})
-			continue
-		}
-		plan.Actions = append(plan.Actions, *action)
 	}
 	return plan, nil
+}
+
+// plannedStatus is the outcome of planning one requirement: an action, or the
+// reason there is none.
+type plannedStatus struct {
+	action *upgrade.Action
+	skip   upgrade.Skip
+}
+
+func planStatus(ws *workspace, mod *model.Module, st *upgrade.Status, vs versionSet, opts upgrade.PlanOptions) (plannedStatus, error) {
+	skip := func(reason string) plannedStatus {
+		return plannedStatus{skip: upgrade.Skip{
+			Module: st.Module, LocalName: st.LocalName, Source: st.Source, Address: st.Address,
+			Reason: reason,
+		}}
+	}
+
+	explicit := opts.Explicit
+	if capped, ok := ws.cfg.MaxLevelFor(st.Address); ok {
+		if capped == "none" {
+			return skip("pinned by .provlift.yaml (max_level: none)"), nil
+		}
+		configured, err := upgrade.ParseLevel(capped)
+		if err != nil {
+			return plannedStatus{}, err
+		}
+		if configured < opts.Level {
+			opts.Level = configured
+		}
+	}
+	if explicit != nil && !containsVersion(vs.Get(st.Address), explicit) && containsPublishedVersion(vs.Published(st.Address), explicit) {
+		return plannedStatus{}, fmt.Errorf("%s is published for %s but does not support the requested platforms", explicit, st.Source)
+	}
+	if st.Error != "" {
+		return plannedStatus{}, fmt.Errorf("registry lookup failed for %s in %s: %s", st.Source, st.Module, st.Error)
+	}
+	if explicit != nil && !containsVersion(vs.Get(st.Address), explicit) {
+		return plannedStatus{}, fmt.Errorf("%s is not a published version of %s", explicit, st.Source)
+	}
+
+	action, reason, err := upgrade.PlanAction(mod, st, vs.Get(st.Address), opts)
+	if err != nil {
+		return plannedStatus{}, fmt.Errorf("planning %s in %s: %w; update the constraint by hand", st.Source, st.Module, err)
+	}
+	if action == nil {
+		// A child module that needs no constraint edit has nothing of its
+		// own to refresh: the roots that call it own the lock files, and
+		// they are planned from their own requirements.
+		return skip(reason), nil
+	}
+	return plannedStatus{action: action}, nil
 }
 
 func containsVersion(candidates []*version.Version, target *version.Version) bool {

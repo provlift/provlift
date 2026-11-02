@@ -184,6 +184,39 @@ func (inv *Inventory) AffectedRoots(changed []string) []*Module {
 	return out
 }
 
+// LocalDescendants returns every scanned module that dir calls, directly or
+// through other local modules, excluding dir itself. Terraform intersects the
+// provider constraints of all of them with the caller's, so their ceilings bind
+// the caller as surely as a vendored module's do.
+func (inv *Inventory) LocalDescendants(dir string) []*Module {
+	byDir := make(map[string]*Module, len(inv.Modules))
+	for _, m := range inv.Modules {
+		byDir[m.Dir] = m
+	}
+
+	seen := map[string]bool{dir: true}
+	var out []*Module
+	var walk func(string)
+	walk = func(current string) {
+		mod, ok := byDir[current]
+		if !ok {
+			return
+		}
+		for _, child := range mod.Children {
+			if seen[child] {
+				continue
+			}
+			seen[child] = true
+			if m, ok := byDir[child]; ok {
+				out = append(out, m)
+			}
+			walk(child)
+		}
+	}
+	walk(dir)
+	return out
+}
+
 // DistinctProviders lists every provider address found anywhere in the scan,
 // in stable display order.
 func (inv *Inventory) DistinctProviders() []Address {
