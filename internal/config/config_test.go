@@ -157,6 +157,16 @@ func TestLoadRejectsBadConfig(t *testing.T) {
 			content:     "terraform:\n  binary: attacker\n",
 			wantMessage: "terraform.binary",
 		},
+		{
+			name:        "providers lock accepts a single mirror",
+			content:     "terraform:\n  fs_mirror: /mirror\n  net_mirror: https://mirror.example.com/providers/\n",
+			wantMessage: "cannot both be set",
+		},
+		{
+			name:        "network mirrors are served over HTTPS",
+			content:     "terraform:\n  net_mirror: http://mirror.example.com/providers/\n",
+			wantMessage: "https://",
+		},
 	}
 
 	for _, tc := range tests {

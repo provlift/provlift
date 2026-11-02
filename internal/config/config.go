@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,12 @@ type Config struct {
 	// Terraform selects the binary to drive, allowing OpenTofu via "tofu".
 	Terraform struct {
 		Binary string `yaml:"binary"`
+
+		// FSMirror and NetMirror direct `providers lock` to a provider mirror,
+		// for runners that cannot reach the public registries. At most one may
+		// be set. A relative FSMirror is read from the repository root.
+		FSMirror  string `yaml:"fs_mirror"`
+		NetMirror string `yaml:"net_mirror"`
 	} `yaml:"terraform"`
 
 	Providers ProviderRules `yaml:"providers"`
@@ -107,6 +114,14 @@ func (c *Config) validate() error {
 	if c.Terraform.Binary != "terraform" && c.Terraform.Binary != "tofu" {
 		return fmt.Errorf("terraform.binary must be terraform or tofu; use --terraform-binary for an explicit executable")
 	}
+	if c.Terraform.FSMirror != "" && c.Terraform.NetMirror != "" {
+		return fmt.Errorf("terraform.fs_mirror and terraform.net_mirror cannot both be set; providers lock accepts a single mirror")
+	}
+	if c.Terraform.NetMirror != "" {
+		if err := CheckNetMirror(c.Terraform.NetMirror); err != nil {
+			return fmt.Errorf("terraform.net_mirror: %w", err)
+		}
+	}
 	for _, selector := range c.Providers.Ignore {
 		if _, err := model.ParseAddress(selector); err != nil {
 			return fmt.Errorf("invalid providers.ignore selector %q: %w", selector, err)
@@ -126,6 +141,19 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("providers.max_level[%q] is %q; want patch, minor, major or none", selector, level)
 		}
+	}
+	return nil
+}
+
+// CheckNetMirror reports whether u can serve the provider network mirror
+// protocol, which Terraform and OpenTofu only speak over HTTPS.
+func CheckNetMirror(u string) error {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return fmt.Errorf("%q is not a valid URL: %w", u, err)
+	}
+	if parsed.Scheme != "https" || parsed.Host == "" {
+		return fmt.Errorf("%q must be an https:// URL", u)
 	}
 	return nil
 }

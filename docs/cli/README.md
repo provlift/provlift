@@ -222,6 +222,8 @@ Plans and applies upgrades, then hands the lock file to Terraform (or OpenTofu).
 | `--skip-validate` | `false` | Do not run `terraform validate` afterwards |
 | `--backend` | `false` | Initialise the backend (needs state access and credentials) |
 | `--platforms` | from config | Platforms to record lock hashes for |
+| `--fs-mirror` | from config | Fetch provider packages for `providers lock` from this filesystem mirror directory |
+| `--net-mirror` | from config | Fetch provider packages for `providers lock` from this HTTPS network mirror |
 | `--fmt` | `true` | Run `terraform fmt` on modified directories |
 | `--pr-body` | none | Write a pull request description to this file (see [11.3](../ci-cd/README.md#113-raising-pull-requests-automatically)) |
 
@@ -248,6 +250,9 @@ provlift upgrade --level patch --module "envs/*"
 
 # Lock for Linux CI only, to avoid downloading every platform
 provlift upgrade --level patch --platforms linux_amd64
+
+# Air-gapped runner: lock from a provider mirror instead of the public registry
+provlift upgrade --level patch --fs-mirror /srv/terraform-providers
 
 # Raise a shared module's supported minimum
 provlift upgrade --provider aws --level major --exact-level --allow-major --raise-floor

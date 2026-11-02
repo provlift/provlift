@@ -19,6 +19,7 @@ import (
 	"github.com/provlift/provlift/internal/pullrequest"
 	"github.com/provlift/provlift/internal/registry"
 	"github.com/provlift/provlift/internal/report"
+	"github.com/provlift/provlift/internal/terraform"
 	"github.com/provlift/provlift/internal/upgrade"
 )
 
@@ -37,8 +38,14 @@ type upgradeOptions struct {
 	skipValidate     bool
 	backend          bool
 	platforms        []string
+	fsMirror         string
+	netMirror        string
 	runFmt           bool
 	prBody           string
+
+	// lockMirror is the mirror providers lock uses, resolved from the flags
+	// or, failing those, the configuration.
+	lockMirror terraform.LockMirror
 }
 
 func newUpgradeCommand(g *globalOptions) *cobra.Command {
@@ -96,6 +103,8 @@ Major upgrades may contain breaking changes and therefore require the explicit
 	f.BoolVar(&opts.skipValidate, "skip-validate", false, "do not run terraform validate after upgrading")
 	f.BoolVar(&opts.backend, "backend", false, "initialise the backend (needs state access and credentials)")
 	f.StringSliceVar(&opts.platforms, "platforms", nil, "platforms to record lock hashes for (default: from config)")
+	f.StringVar(&opts.fsMirror, "fs-mirror", "", "fetch provider packages for the lock file from this filesystem mirror (default: from config)")
+	f.StringVar(&opts.netMirror, "net-mirror", "", "fetch provider packages for the lock file from this HTTPS network mirror (default: from config)")
 	f.BoolVar(&opts.runFmt, "fmt", true, "run terraform fmt on modified directories")
 	f.StringVar(&opts.prBody, "pr-body", "", "write a pull request description to this file")
 	return cmd
@@ -171,6 +180,10 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 		if explicit != nil {
 			return exitWith(ExitError, fmt.Errorf("--next-major cannot be combined with --to"))
 		}
+	}
+
+	if opts.lockMirror, err = resolveLockMirror(ws, opts); err != nil {
+		return exitWith(ExitError, err)
 	}
 
 	platforms := opts.platforms
@@ -297,6 +310,31 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 		fmt.Fprintln(g.stdout(), "\nUpgrade complete. Review the diff, including .terraform.lock.hcl, before committing.")
 	}
 	return nil
+}
+
+// resolveLockMirror picks the mirror for providers lock. A mirror flag replaces
+// whatever the configuration names, as --platforms does. Filesystem paths are
+// made absolute because providers lock runs inside each root module: a flag is
+// read from the working directory, a configured path from the repository root.
+func resolveLockMirror(ws *workspace, opts *upgradeOptions) (terraform.LockMirror, error) {
+	switch {
+	case opts.fsMirror != "" && opts.netMirror != "":
+		return terraform.LockMirror{}, fmt.Errorf("--fs-mirror cannot be combined with --net-mirror; providers lock accepts a single mirror")
+	case opts.fsMirror != "":
+		path, err := filepath.Abs(opts.fsMirror)
+		return terraform.LockMirror{FS: path}, err
+	case opts.netMirror != "":
+		if err := config.CheckNetMirror(opts.netMirror); err != nil {
+			return terraform.LockMirror{}, fmt.Errorf("--net-mirror: %w", err)
+		}
+		return terraform.LockMirror{Net: opts.netMirror}, nil
+	}
+
+	mirror := terraform.LockMirror{FS: ws.cfg.Terraform.FSMirror, Net: ws.cfg.Terraform.NetMirror}
+	if mirror.FS != "" && !filepath.IsAbs(mirror.FS) {
+		mirror.FS = filepath.Join(ws.root, filepath.FromSlash(mirror.FS))
+	}
+	return mirror, nil
 }
 
 func buildPlan(ws *workspace, statuses []*upgrade.Status, vs versionSet, requested upgrade.Level, explicit *version.Version, pin, raiseFloor, nextMajor, exactLevel, includePrerelease bool) (*upgrade.Plan, error) {

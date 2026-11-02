@@ -159,11 +159,29 @@ func (r *Runner) Init(ctx context.Context, dir string, opts InitOptions) (Result
 	return r.run(ctx, dir, args...)
 }
 
+// LockMirror points `providers lock` at a provider mirror instead of the origin
+// registries. The command ignores the mirrors in the CLI configuration's
+// provider_installation block, so runners that can only reach a mirror have to
+// name it explicitly. At most one field may be set.
+type LockMirror struct {
+	// FS is a local filesystem mirror directory.
+	FS string
+
+	// Net is the HTTPS base URL of a network mirror.
+	Net string
+}
+
 // ProvidersLock runs `terraform providers lock`, recording checksums for every
 // requested platform. Without this, a lock file written on one OS omits hashes
 // needed by CI or colleagues on another.
-func (r *Runner) ProvidersLock(ctx context.Context, dir string, platforms []string) (Result, error) {
+func (r *Runner) ProvidersLock(ctx context.Context, dir string, platforms []string, mirror LockMirror) (Result, error) {
 	args := []string{"providers", "lock"}
+	switch {
+	case mirror.FS != "":
+		args = append(args, "-fs-mirror="+mirror.FS)
+	case mirror.Net != "":
+		args = append(args, "-net-mirror="+mirror.Net)
+	}
 	for _, p := range platforms {
 		args = append(args, "-platform="+p)
 	}

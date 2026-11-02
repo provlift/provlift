@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,84 @@ func TestUpgradeNeverWritesLockFileItself(t *testing.T) {
 			}
 			if string(got) != string(written) {
 				t.Errorf("lock differs from what Terraform wrote:\ngot:\n%s\nTerraform wrote:\n%s", got, written)
+			}
+		})
+	}
+}
+
+func TestUpgradeLocksFromConfiguredMirror(t *testing.T) {
+	// providers lock runs inside each root module, so a filesystem mirror is
+	// passed as an absolute path: a flag read from the working directory, a
+	// configured path from the repository root. A flag replaces the config.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		config string
+		flags  []string
+		want   func(root string) string
+	}{
+		{"no mirror", "", nil, func(string) string { return "" }},
+		{"configured filesystem mirror", "terraform:\n  fs_mirror: mirror\n", nil,
+			func(root string) string { return "-fs-mirror=" + filepath.Join(root, "mirror") }},
+		{"configured network mirror", "terraform:\n  net_mirror: https://mirror.example.com/providers/\n", nil,
+			func(string) string { return "-net-mirror=https://mirror.example.com/providers/" }},
+		{"flag replaces configuration", "terraform:\n  net_mirror: https://mirror.example.com/providers/\n", []string{"--fs-mirror", "local"},
+			func(string) string { return "-fs-mirror=" + filepath.Join(cwd, "local") }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			files := map[string]string{}
+			if tc.config != "" {
+				files[".provlift.yaml"] = tc.config
+			}
+			h := newHarness(t, files)
+			logPath := useFakeTerraform(t, h)
+
+			arguments := append([]string{"--provider", "azurerm", "--to", "5.6.0", "--level", "major", "--allow-major"}, tc.flags...)
+			if err := h.run(t, newUpgradeCommand(h.opts), arguments...); err != nil {
+				t.Fatalf("upgrade: %v", err)
+			}
+
+			calls := readInvocations(t, logPath)
+			at := indexOfCall(calls, "providers lock")
+			if at < 0 {
+				t.Fatalf("providers lock was never run:\n%s", strings.Join(calls, "\n"))
+			}
+			var got []string
+			for _, argument := range strings.Fields(calls[at]) {
+				if strings.Contains(argument, "-mirror=") {
+					got = append(got, argument)
+				}
+			}
+			want := tc.want(h.dir)
+			if (want == "" && len(got) != 0) || (want != "" && (len(got) != 1 || got[0] != want)) {
+				t.Errorf("providers lock mirror arguments = %v, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestUpgradeRefusesConflictingMirrorFlags(t *testing.T) {
+	for name, flags := range map[string][]string{
+		"both mirrors":      {"--fs-mirror", "/srv/providers", "--net-mirror", "https://mirror.example.com/providers/"},
+		"plain HTTP mirror": {"--net-mirror", "http://mirror.example.com/providers/"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, nil)
+			logPath := useFakeTerraform(t, h)
+			before := h.mainTF(t)
+
+			arguments := append([]string{"--provider", "azurerm", "--to", "5.6.0", "--level", "major", "--allow-major"}, flags...)
+			var coded *ExitCodeError
+			if err := h.run(t, newUpgradeCommand(h.opts), arguments...); !errors.As(err, &coded) || coded.Code != ExitError {
+				t.Fatalf("expected exit 1 for %v, got %v", flags, err)
+			}
+			if h.mainTF(t) != before || len(readInvocations(t, logPath)) != 0 {
+				t.Error("a refused mirror changed configuration or invoked Terraform")
 			}
 		})
 	}

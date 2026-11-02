@@ -180,7 +180,7 @@ func applyTerraform(ctx context.Context, g *globalOptions, ws *workspace, plan *
 
 		if len(platforms) > 0 {
 			announce(root.RelDir, "providers lock")
-			res, err := runner.ProvidersLock(ctx, root.Dir, platforms)
+			res, err := runner.ProvidersLock(ctx, root.Dir, platforms, opts.lockMirror)
 			if err != nil {
 				return runs, restoreLockAfterFailure(root, original, readErr == nil, err)
 			}

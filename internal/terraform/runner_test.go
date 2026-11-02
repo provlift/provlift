@@ -132,10 +132,38 @@ func TestInitBuildsExpectedArguments(t *testing.T) {
 	}
 }
 
+func TestProvidersLockPassesTheMirror(t *testing.T) {
+	// providers lock ignores provider_installation in the CLI configuration,
+	// so a runner that can only reach a mirror must name it on the command.
+	tests := []struct {
+		name   string
+		mirror LockMirror
+		want   string
+	}{
+		{"filesystem mirror", LockMirror{FS: "/srv/providers"}, "-fs-mirror=/srv/providers"},
+		{"network mirror", LockMirror{Net: "https://mirror.example.com/providers/"}, "-net-mirror=https://mirror.example.com/providers/"},
+		{"origin registries", LockMirror{}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := fakeRunner(t, "echo-args").ProvidersLock(context.Background(), t.TempDir(), []string{"linux_amd64"}, tc.mirror)
+			if err != nil {
+				t.Fatalf("ProvidersLock: %v", err)
+			}
+			if tc.want != "" && !strings.Contains(res.Stdout, tc.want) {
+				t.Errorf("arguments %q missing %q", res.Stdout, tc.want)
+			}
+			if tc.want == "" && strings.Contains(res.Stdout, "mirror") {
+				t.Errorf("arguments %q name a mirror nobody configured", res.Stdout)
+			}
+		})
+	}
+}
+
 func TestProvidersLockRequestsEveryPlatform(t *testing.T) {
 	platforms := []string{"windows_amd64", "linux_amd64", "darwin_arm64"}
 
-	res, err := fakeRunner(t, "echo-args").ProvidersLock(context.Background(), t.TempDir(), platforms)
+	res, err := fakeRunner(t, "echo-args").ProvidersLock(context.Background(), t.TempDir(), platforms, LockMirror{})
 	if err != nil {
 		t.Fatalf("ProvidersLock: %v", err)
 	}

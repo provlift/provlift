@@ -127,6 +127,18 @@
   If it holds content you need, copy it over the `.tf` file by hand first.
   A backup inside an excluded directory is ignored.
 
+### 12.16 `providers lock` fails on a runner without internet access
+
+- **Cause** — `terraform providers lock` ignores the mirrors in the CLI
+  configuration and contacts each provider's origin registry.
+- **Fix** — Set `terraform.fs_mirror` or `terraform.net_mirror` in
+  `.provlift.yaml`, or pass `--fs-mirror` / `--net-mirror`. The mirror must
+  hold every platform in `platforms`. See
+  [provider mirrors](../configuration/README.md#83-provider-mirrors-and-air-gapped-runners).
+  provlift's own version lookups still query the registry API directly;
+  mirror support for those is tracked in
+  [#20](https://github.com/provlift/provlift/issues/20).
+
 ---
 
 ---
