@@ -134,6 +134,11 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 		}
 	}()
 	ctx := cmd.Context()
+	// Refuse unusable mirror flags before recovery can rewrite any file, so a
+	// refused invocation leaves the repository exactly as it found it.
+	if err := checkMirrorFlags(opts); err != nil {
+		return exitWith(ExitError, err)
+	}
 	if !opts.dryRun {
 		root, err := filepath.Abs(g.dir)
 		if err != nil {
@@ -312,21 +317,31 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 	return nil
 }
 
+// checkMirrorFlags refuses mirror flags providers lock cannot use. It needs no
+// workspace, so it runs before recovery, which may rewrite files.
+func checkMirrorFlags(opts *upgradeOptions) error {
+	if opts.fsMirror != "" && opts.netMirror != "" {
+		return fmt.Errorf("--fs-mirror cannot be combined with --net-mirror; providers lock accepts a single mirror")
+	}
+	if opts.netMirror != "" {
+		if err := config.CheckNetMirror(opts.netMirror); err != nil {
+			return fmt.Errorf("--net-mirror: %w", err)
+		}
+	}
+	return nil
+}
+
 // resolveLockMirror picks the mirror for providers lock. A mirror flag replaces
 // whatever the configuration names, as --platforms does. Filesystem paths are
 // made absolute because providers lock runs inside each root module: a flag is
 // read from the working directory, a configured path from the repository root.
+// The flags themselves were already vetted by checkMirrorFlags.
 func resolveLockMirror(ws *workspace, opts *upgradeOptions) (terraform.LockMirror, error) {
 	switch {
-	case opts.fsMirror != "" && opts.netMirror != "":
-		return terraform.LockMirror{}, fmt.Errorf("--fs-mirror cannot be combined with --net-mirror; providers lock accepts a single mirror")
 	case opts.fsMirror != "":
 		path, err := filepath.Abs(opts.fsMirror)
 		return terraform.LockMirror{FS: path}, err
 	case opts.netMirror != "":
-		if err := config.CheckNetMirror(opts.netMirror); err != nil {
-			return terraform.LockMirror{}, fmt.Errorf("--net-mirror: %w", err)
-		}
 		return terraform.LockMirror{Net: opts.netMirror}, nil
 	}
 
