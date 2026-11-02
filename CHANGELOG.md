@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0](https://github.com/provlift/provlift/compare/v0.1.2...v0.2.0) (2026-11-02)
+
+
+### Features
+
+* **upgrade:** pass --fs-mirror / --net-mirror to providers lock ([#78](https://github.com/provlift/provlift/issues/78)) ([4d3cfd9](https://github.com/provlift/provlift/commit/4d3cfd9092fc7f54932f6a78b3286f5de147d85f))
+* **upgrade:** report module versions moved by init -upgrade ([#77](https://github.com/provlift/provlift/issues/77)) ([19184df](https://github.com/provlift/provlift/commit/19184dfd284cda7fdf6433e7a9a317e50cc96c75))
+
+
+### Bug Fixes
+
+* **check:** apply provider ceilings from repository-local modules to their callers ([#76](https://github.com/provlift/provlift/issues/76)) ([e23d1f5](https://github.com/provlift/provlift/commit/e23d1f5987e49102770914c85161dcf2a8b0ea48))
+* **terraform:** pass fmt file names as ./-prefixed paths ([#71](https://github.com/provlift/provlift/issues/71)) ([493d5ef](https://github.com/provlift/provlift/commit/493d5ef5c8d83a39a57482cef2917921ecc1fa7d))
+* **upgrade:** format only the edited files after an upgrade ([#68](https://github.com/provlift/provlift/issues/68)) ([db55311](https://github.com/provlift/provlift/commit/db55311dbc19c4bc3a5fc063bf9f83d26d8bb5e0)), closes [#16](https://github.com/provlift/provlift/issues/16)
+
 ## [0.1.2](https://github.com/provlift/provlift/compare/v0.1.1...v0.1.2) (2026-10-31)
 
 
