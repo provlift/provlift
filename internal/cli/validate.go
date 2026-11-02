@@ -159,6 +159,10 @@ func applyTerraform(ctx context.Context, g *globalOptions, ws *workspace, plan *
 		before, hadBaseline, beforeErr := depgraph.Selections(root.Dir)
 		announce(root.RelDir, "init -upgrade")
 		res, err := initWithPlannedProviders(ctx, runner, root, allowed[root.Dir], opts.backend)
+		// Terraform installs modules before it resolves providers, and
+		// restoring the lock file does not put the old modules back, so an
+		// init that fails part-way can still have moved them.
+		recordModuleChanges(modules, root, before, hadBaseline && beforeErr == nil)
 		if err != nil {
 			return runs, restoreLockAfterFailure(root, original, readErr == nil, err)
 		}
@@ -170,7 +174,6 @@ func applyTerraform(ctx context.Context, g *globalOptions, ws *workspace, plan *
 			}
 			continue
 		}
-		recordModuleChanges(modules, root, before, hadBaseline && beforeErr == nil)
 		if err := verifyPlannedLock(root, allowed[root.Dir], original, readErr == nil); err != nil {
 			return runs, err
 		}
@@ -556,7 +559,7 @@ func printModuleVersions(g *globalOptions, modules pullrequest.ModuleVersions) {
 			rows = append(rows, []string{c.Root, c.Module, c.Source, orDash(c.From), orDash(c.To)})
 		}
 		_ = report.Table(g.stdout(), []string{"ROOT", "MODULE", "SOURCE", "FROM", "TO"}, rows)
-		fmt.Fprintln(g.stdout(), "\nterraform init -upgrade also moved these modules; validation ran against them.")
+		fmt.Fprintln(g.stdout(), "\nterraform init -upgrade also moved these modules.")
 	}
 	for _, root := range modules.NoBaseline {
 		fmt.Fprintf(g.stdout(), "%s: no earlier module selection was recorded, so module changes could not be detected.\n", root)

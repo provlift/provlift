@@ -65,6 +65,28 @@ func TestUpgradeReportsModuleVersionMovedByInit(t *testing.T) {
 	}
 }
 
+func TestUpgradeReportsModulesMovedByFailedInit(t *testing.T) {
+	// Terraform installs modules before it resolves providers. When init then
+	// fails, the lock file is restored but the newer module code stays on
+	// disk, so the movement must still be reported.
+	h := newHarness(t, map[string]string{".terraform/modules/modules.json": moduleManifest("5.1.0")})
+	useFakeTerraform(t, h)
+	t.Setenv(fakeModuleManifest, moduleManifest("5.4.0"))
+	t.Setenv(fakeTerraformFail, "init")
+	h.opts.jsonOut = true
+
+	if err := h.run(t, newUpgradeCommand(h.opts), "--provider", "azurerm", "--to", "4.81.0", "--level", "minor"); err == nil {
+		t.Fatal("expected the failed init to fail the upgrade")
+	}
+	var result moduleVersionsResult
+	if err := json.Unmarshal(h.stdout.Bytes(), &result); err != nil {
+		t.Fatalf("parsing upgrade JSON: %v\n%s", err, h.stdout.String())
+	}
+	if changes := result.ModuleVersions.Changes; len(changes) != 1 || changes[0].To != "5.4.0" {
+		t.Errorf("changes = %+v, want vpc moved to 5.4.0 despite the failed init", changes)
+	}
+}
+
 func TestUpgradeSaysWhenNoModuleBaselineExists(t *testing.T) {
 	// A clean checkout has no modules.json, so nothing can be compared. That
 	// must be said rather than reported as "no changes".

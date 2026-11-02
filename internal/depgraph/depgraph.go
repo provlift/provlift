@@ -20,8 +20,19 @@ import (
 	"github.com/provlift/provlift/internal/model"
 )
 
-// manifestPath is where Terraform records the modules it has installed.
-const manifestPath = ".terraform/modules/modules.json"
+// manifestPath returns where Terraform records the modules it has installed
+// for rootDir. TF_DATA_DIR moves the whole data directory, and Terraform reads
+// a relative value against its working directory, which is the root module.
+func manifestPath(rootDir string) string {
+	dataDir := os.Getenv("TF_DATA_DIR")
+	if dataDir == "" {
+		dataDir = ".terraform"
+	}
+	if !filepath.IsAbs(dataDir) {
+		dataDir = filepath.Join(rootDir, dataDir)
+	}
+	return filepath.Join(dataDir, "modules", "modules.json")
+}
 
 // Requirement is one provider constraint declared by one vendored module.
 type Requirement struct {
@@ -84,7 +95,7 @@ func (r Requirement) Label() string {
 // Load's result genuinely has no external constraint. Without one, nothing is
 // known and a weaker source has to be consulted.
 func Vendored(rootDir string) bool {
-	_, err := os.Stat(filepath.Join(rootDir, filepath.FromSlash(manifestPath)))
+	_, err := os.Stat(manifestPath(rootDir))
 	return err == nil
 }
 
@@ -152,7 +163,7 @@ type manifest struct {
 // readManifest returns nil, and no error, when rootDir has never been
 // initialised.
 func readManifest(rootDir string) (*manifest, error) {
-	raw, err := os.ReadFile(filepath.Join(rootDir, filepath.FromSlash(manifestPath)))
+	raw, err := os.ReadFile(manifestPath(rootDir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

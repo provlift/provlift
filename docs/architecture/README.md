@@ -265,7 +265,10 @@ after a failed Terraform step is not reported as changed.
 `init -upgrade`, which re-resolves modules as well as providers. Each change
 names the root, the module call, its source and the versions before and after.
 Module selections live in `.terraform/modules/modules.json`, which is not
-committed, so the diff never shows them, but validation runs against them.
+committed, so the diff never shows them, but later Terraform steps run against
+them. Selections are compared even when `init` fails, since Terraform installs
+modules before resolving providers and restoring the lock file does not undo
+that. `TF_DATA_DIR` is honoured when locating the manifest.
 Only registry modules record a version; local and git sources are fixed by
 their path or ref. `no_baseline` lists roots that call versioned modules but
 had no earlier selection on disk, such as a fresh checkout, where a change

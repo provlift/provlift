@@ -258,8 +258,8 @@ func body(plan *upgrade.Plan, providers []providerChange, runs []TerraformRun, c
 	if len(modules.Changes) > 0 || len(modules.NoBaseline) > 0 {
 		b.WriteString("\n## Module versions\n\n")
 		b.WriteString("`init -upgrade` re-resolves modules as well as providers. Module selections\n")
-		b.WriteString("are not committed, so CI resolves them on its own, but the verification above\n")
-		b.WriteString("ran against these.\n")
+		b.WriteString("are not committed, so CI resolves them on its own, but any Terraform commands\n")
+		b.WriteString("listed above ran against these.\n")
 	}
 	if len(modules.Changes) > 0 {
 		b.WriteString("\n| Root | Module | Source | From | To |\n")

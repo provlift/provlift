@@ -160,6 +160,38 @@ func TestSelectionsReadsResolvedVersions(t *testing.T) {
 	}
 }
 
+func TestSelectionsHonoursTFDataDir(t *testing.T) {
+	// TF_DATA_DIR moves the whole data directory. Terraform reads a relative
+	// value against the root module, and an absolute one as is.
+	manifest := `{"Modules":[{"Key":"","Source":"","Dir":"."},` +
+		`{"Key":"vpc","Source":"registry.terraform.io/acme/vpc/aws","Version":"5.4.0","Dir":"x"}]}`
+	write := func(dir string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(dir, "modules"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "modules", "modules.json"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	root := t.TempDir()
+	write(filepath.Join(root, "tfdata"))
+	absolute := t.TempDir()
+	write(absolute)
+
+	for _, dataDir := range []string{"tfdata", absolute} {
+		t.Setenv("TF_DATA_DIR", dataDir)
+		got, recorded, err := Selections(root)
+		if err != nil || !recorded || got["vpc"].Version != "5.4.0" {
+			t.Errorf("TF_DATA_DIR=%s: Selections() = %+v, %t, %v", dataDir, got, recorded, err)
+		}
+		if !Vendored(root) {
+			t.Errorf("TF_DATA_DIR=%s: Vendored() = false", dataDir)
+		}
+	}
+}
+
 func TestLoadSkipsModulesDeclaringNoConstraint(t *testing.T) {
 	root := vendored(t, map[string]string{
 		"bare": "git::https://github.com/acme/mod.git?ref=v1.0.0|",

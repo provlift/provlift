@@ -58,6 +58,18 @@ func runFakeTerraform() int {
 		}
 	}
 
+	// init -upgrade re-resolves modules before providers, so the manifest it
+	// writes survives even a simulated init failure.
+	if manifest := os.Getenv(fakeModuleManifest); command == "init" && manifest != "" {
+		dir := filepath.Join(".terraform", "modules")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return 1
+		}
+		if err := os.WriteFile(filepath.Join(dir, "modules.json"), []byte(manifest), 0o644); err != nil {
+			return 1
+		}
+	}
+
 	if fail := os.Getenv(fakeTerraformFail); fail != "" && strings.HasPrefix(command, fail) {
 		fmt.Fprintf(os.Stderr, "Error: simulated %s failure\n", command)
 		return 1
@@ -103,16 +115,6 @@ provider "registry.terraform.io/integrations/github" {
 		}
 		if err := os.WriteFile(filepath.Join(cwd, ".terraform.lock.hcl"), []byte(content), 0o644); err != nil {
 			return 1
-		}
-		// init -upgrade re-resolves modules too; emulate the manifest it writes.
-		if manifest := os.Getenv(fakeModuleManifest); manifest != "" {
-			dir := filepath.Join(cwd, ".terraform", "modules")
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return 1
-			}
-			if err := os.WriteFile(filepath.Join(dir, "modules.json"), []byte(manifest), 0o644); err != nil {
-				return 1
-			}
 		}
 		// Record exactly what Terraform wrote, so a test can prove the CLI
 		// left those bytes alone afterwards.
