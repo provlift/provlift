@@ -791,12 +791,12 @@ func TestUpgradeJSONParsingErrors(t *testing.T) {
 			if err := json.Unmarshal(output.Bytes(), &response); err != nil {
 				t.Fatalf("argument error omitted JSON response: %v\n%s", err, output.String())
 			}
-			for _, key := range []string{"dry_run", "plan", "changed_files", "terraform_runs", "pull_request"} {
+			for _, key := range []string{"dry_run", "plan", "changed_files", "terraform_runs", "module_versions", "pull_request"} {
 				if _, exists := response[key]; !exists {
 					t.Errorf("argument error omitted %s", key)
 				}
 			}
-			if len(response) != 5 {
+			if len(response) != 6 {
 				t.Fatalf("unexpected response keys: %s", output.String())
 			}
 		})
@@ -861,7 +861,7 @@ func TestUpgradeJSONOutcomeContract(t *testing.T) {
 			if err := json.Unmarshal(h.stdout.Bytes(), &result); err != nil {
 				t.Fatalf("invalid JSON response: %v\n%s", err, h.stdout.String())
 			}
-			keys := []string{"dry_run", "plan", "changed_files", "terraform_runs", "pull_request"}
+			keys := []string{"dry_run", "plan", "changed_files", "terraform_runs", "module_versions", "pull_request"}
 			if len(result) != len(keys) {
 				t.Errorf("response has %d keys, want %d", len(result), len(keys))
 			}
@@ -1058,7 +1058,7 @@ func TestUpgradeRegistryFailureReturnsError(t *testing.T) {
 		t.Fatal("failed registry lookup modified the configuration")
 	}
 	var result map[string]json.RawMessage
-	if err := json.Unmarshal(h.stdout.Bytes(), &result); err != nil || len(result) != 5 {
+	if err := json.Unmarshal(h.stdout.Bytes(), &result); err != nil || len(result) != 6 {
 		t.Fatalf("registry error did not emit the JSON envelope: %s (%v)", h.stdout.String(), err)
 	}
 }

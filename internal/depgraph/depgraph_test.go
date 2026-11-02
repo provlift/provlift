@@ -143,6 +143,23 @@ func TestLocalLabelsModulesByRepositoryPath(t *testing.T) {
 	}
 }
 
+func TestSelectionsReadsResolvedVersions(t *testing.T) {
+	root := vendored(t, map[string]string{
+		"vpc": "registry.terraform.io/acme/vpc/aws|",
+	})
+	got, recorded, err := Selections(root)
+	if err != nil || !recorded {
+		t.Fatalf("Selections() = %v, %t, %v; want a recorded manifest", got, recorded, err)
+	}
+	if _, isRoot := got[""]; isRoot || got["vpc"].Source != "registry.terraform.io/acme/vpc/aws" {
+		t.Errorf("Selections() = %+v, want the vpc call and not the root itself", got)
+	}
+
+	if _, recorded, err := Selections(t.TempDir()); recorded || err != nil {
+		t.Errorf("an uninitialised root reported recorded=%t, err=%v", recorded, err)
+	}
+}
+
 func TestLoadSkipsModulesDeclaringNoConstraint(t *testing.T) {
 	root := vendored(t, map[string]string{
 		"bare": "git::https://github.com/acme/mod.git?ref=v1.0.0|",

@@ -108,7 +108,10 @@ func upgradeResult(dryRun bool) map[string]any {
 		"plan":           emptyPlan,
 		"changed_files":  []string{},
 		"terraform_runs": []any{},
-		"pull_request":   pullrequest.Build(emptyPlan, nil, nil),
+		"module_versions": pullrequest.ModuleVersions{
+			Changes: []pullrequest.ModuleChange{}, NoBaseline: []string{},
+		},
+		"pull_request": pullrequest.Build(emptyPlan, nil, nil),
 	}
 }
 
@@ -258,8 +261,10 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 		result["pull_request"] = pullrequest.Build(plan, nil, reportedFiles)
 		return exitWith(ExitError, err)
 	}
-	runs, runErr := applyTerraform(ctx, g, ws, plan, opts, changedFiles)
+	modules := pullrequest.ModuleVersions{Changes: []pullrequest.ModuleChange{}, NoBaseline: []string{}}
+	runs, runErr := applyTerraform(ctx, g, ws, plan, opts, changedFiles, &modules)
 	result["terraform_runs"] = runs
+	result["module_versions"] = modules
 	runCode := ExitValidationFailed
 	if runErr != nil && !errors.Is(runErr, errTerraformReported) {
 		runCode = ExitError
@@ -273,7 +278,7 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 	reportedFiles := relativeFiles(ws.root, changedFiles)
 	result["changed_files"] = reportedFiles
 
-	pr := pullrequest.Build(plan, toPullRequestRuns(runs), reportedFiles)
+	pr := pullrequest.BuildWithModules(plan, toPullRequestRuns(runs), reportedFiles, modules)
 	result["pull_request"] = pr
 	if err := writePullRequestBody(opts.prBody, pr); err != nil {
 		return exitWith(ExitError, err)
@@ -282,6 +287,7 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 	if !g.jsonOut {
 		printChangedFiles(g, changedFiles)
 		printRuns(g, runs)
+		printModuleVersions(g, modules)
 	}
 
 	if runErr != nil {

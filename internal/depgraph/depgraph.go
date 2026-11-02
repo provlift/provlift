@@ -98,22 +98,8 @@ func Load(rootDir string) ([]Requirement, error) {
 // LoadRegistry is Load with the registry that sources without a hostname
 // resolve against, so vendored requirements match the root module's.
 func LoadRegistry(rootDir, registryHost string) ([]Requirement, error) {
-	raw, err := os.ReadFile(filepath.Join(rootDir, filepath.FromSlash(manifestPath)))
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	var manifest struct {
-		Modules []struct {
-			Key    string `json:"Key"`
-			Source string `json:"Source"`
-			Dir    string `json:"Dir"`
-		} `json:"Modules"`
-	}
-	if err := json.Unmarshal(raw, &manifest); err != nil {
+	manifest, err := readManifest(rootDir)
+	if err != nil || manifest == nil {
 		return nil, err
 	}
 
@@ -151,6 +137,61 @@ func LoadRegistry(rootDir, registryHost string) ([]Requirement, error) {
 		return out[i].Module < out[j].Module
 	})
 	return out, nil
+}
+
+// manifest is the part of modules.json this package reads.
+type manifest struct {
+	Modules []struct {
+		Key     string `json:"Key"`
+		Source  string `json:"Source"`
+		Version string `json:"Version"`
+		Dir     string `json:"Dir"`
+	} `json:"Modules"`
+}
+
+// readManifest returns nil, and no error, when rootDir has never been
+// initialised.
+func readManifest(rootDir string) (*manifest, error) {
+	raw, err := os.ReadFile(filepath.Join(rootDir, filepath.FromSlash(manifestPath)))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var m manifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// Selection is one module call as Terraform last resolved it.
+type Selection struct {
+	Source string
+
+	// Version is the resolved release of a registry module. Local and git
+	// sources record none: their content is fixed by the path or ref in Source.
+	Version string
+}
+
+// Selections reports the module calls Terraform has resolved for rootDir, keyed
+// by call path (e.g. "network" or "network.subnets"). The boolean is false
+// when nothing has been recorded yet, which is different from a root that
+// calls no modules.
+func Selections(rootDir string) (map[string]Selection, bool, error) {
+	m, err := readManifest(rootDir)
+	if err != nil || m == nil {
+		return nil, false, err
+	}
+	out := map[string]Selection{}
+	for _, entry := range m.Modules {
+		if entry.Key != "" {
+			out[entry.Key] = Selection{Source: entry.Source, Version: entry.Version}
+		}
+	}
+	return out, true, nil
 }
 
 // For returns the requirements that apply to one provider.

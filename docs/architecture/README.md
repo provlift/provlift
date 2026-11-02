@@ -252,6 +252,7 @@ also exit nonzero and are reported on stderr:
   "plan": { "actions": [], "skipped": [] },
   "changed_files": [],
   "terraform_runs": [],
+  "module_versions": { "changes": [], "no_baseline": [] },
   "pull_request": { "branch": "", "title": "", "labels": [], "body": "" }
 }
 ```
@@ -259,6 +260,17 @@ also exit nonzero and are reported on stderr:
 `changed_files` lists repository-relative constraint files edited by provlift and
 lock files whose contents differ after Terraform runs. A lock file restored
 after a failed Terraform step is not reported as changed.
+
+`module_versions` reports module calls whose resolved version moved during
+`init -upgrade`, which re-resolves modules as well as providers. Each change
+names the root, the module call, its source and the versions before and after.
+Module selections live in `.terraform/modules/modules.json`, which is not
+committed, so the diff never shows them, but validation runs against them.
+Only registry modules record a version; local and git sources are fixed by
+their path or ref. `no_baseline` lists roots that call versioned modules but
+had no earlier selection on disk, such as a fresh checkout, where a change
+cannot be detected. The same information appears in the text output and in
+the generated pull request description.
 
 ### Pull request metadata
 

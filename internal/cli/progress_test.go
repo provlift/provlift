@@ -51,7 +51,7 @@ func TestUpgradeProgressUsesStderrInJSONMode(t *testing.T) {
 		t.Errorf("JSON mode must retain live progress on stderr:\n%s", h.stderr.String())
 	}
 	var response map[string]json.RawMessage
-	if err := json.Unmarshal(h.stdout.Bytes(), &response); err != nil || len(response) != 5 {
+	if err := json.Unmarshal(h.stdout.Bytes(), &response); err != nil || len(response) != 6 {
 		t.Fatalf("progress corrupted JSON stdout: %v\n%s", err, h.stdout.String())
 	}
 	if strings.Contains(h.stderr.String(), `"valid":true`) {

@@ -12,6 +12,7 @@ import (
 	"github.com/provlift/provlift/internal/discovery"
 	"github.com/provlift/provlift/internal/lockfile"
 	"github.com/provlift/provlift/internal/model"
+	"github.com/provlift/provlift/internal/pullrequest"
 	"github.com/provlift/provlift/internal/terraform"
 	"github.com/provlift/provlift/internal/upgrade"
 )
@@ -27,6 +28,7 @@ const (
 	fakeUnexpectedProvider = "PROVLIFT_CLI_FAKE_UNEXPECTED_PROVIDER"
 	fakeExceedsTarget      = "PROVLIFT_CLI_FAKE_EXCEEDS_TARGET"
 	fakeLockSnapshot       = "PROVLIFT_CLI_FAKE_LOCK_SNAPSHOT"
+	fakeModuleManifest     = "PROVLIFT_CLI_FAKE_MODULES"
 )
 
 func TestMain(m *testing.M) {
@@ -101,6 +103,16 @@ provider "registry.terraform.io/integrations/github" {
 		}
 		if err := os.WriteFile(filepath.Join(cwd, ".terraform.lock.hcl"), []byte(content), 0o644); err != nil {
 			return 1
+		}
+		// init -upgrade re-resolves modules too; emulate the manifest it writes.
+		if manifest := os.Getenv(fakeModuleManifest); manifest != "" {
+			dir := filepath.Join(cwd, ".terraform", "modules")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return 1
+			}
+			if err := os.WriteFile(filepath.Join(dir, "modules.json"), []byte(manifest), 0o644); err != nil {
+				return 1
+			}
 		}
 		// Record exactly what Terraform wrote, so a test can prove the CLI
 		// left those bytes alone afterwards.
@@ -397,7 +409,7 @@ func TestSyntheticChildActionDoesNotDowngradeRootLock(t *testing.T) {
 		ModuleDir: h.dir, Address: address, Level: upgrade.LevelNone,
 		From: "3.85.0", To: "3.85.0",
 	}}}
-	if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil); err != nil {
+	if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil, &pullrequest.ModuleVersions{}); err != nil {
 		t.Fatal(err)
 	}
 	locks, _, err := lockfile.Read(h.dir)
@@ -424,7 +436,7 @@ func TestSyntheticChildActionDoesNotOverrideRealTarget(t *testing.T) {
 		{ModuleDir: h.dir, Address: address, Level: upgrade.LevelMajor, From: "4.65.0", To: "5.6.0"},
 		{ModuleDir: h.dir, Address: address, Level: upgrade.LevelNone, From: "3.85.0", To: "3.85.0"},
 	}}
-	if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil); err != nil {
+	if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil, &pullrequest.ModuleVersions{}); err != nil {
 		t.Fatal(err)
 	}
 	locks, _, err := lockfile.Read(h.dir)
@@ -470,7 +482,7 @@ func TestChildUpgradeCannotLowerConsumingRootTarget(t *testing.T) {
 				ModuleDir: childDir, Address: address, Level: upgrade.LevelPatch,
 				From: "3.85.0", To: "3.85.1",
 			})
-			if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil); err != nil {
+			if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil, &pullrequest.ModuleVersions{}); err != nil {
 				t.Fatal(err)
 			}
 			locks, _, err := lockfile.Read(h.dir)
