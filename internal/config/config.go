@@ -56,10 +56,15 @@ type ProviderRules struct {
 	MaxLevel map[string]string `yaml:"max_level"`
 }
 
-// DefaultPlatforms covers the machines this team builds and runs on.
+// DefaultPlatforms covers the machines Terraform commonly runs on: Windows and
+// Linux workstations, Intel and Apple Silicon Macs, and x86 and ARM Linux CI
+// runners and servers such as AWS Graviton. A platform missing here gets its
+// hash added by the first init that runs on it, which is the lock-file churn
+// locking every platform up front avoids.
 var DefaultPlatforms = []string{
 	"windows_amd64",
 	"linux_amd64",
+	"linux_arm64",
 	"darwin_amd64",
 	"darwin_arm64",
 }
