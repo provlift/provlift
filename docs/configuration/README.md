@@ -33,6 +33,13 @@ Unknown keys are rejected, so a typo cannot silently disable a safety rule.
 For the same reason the file must hold a single YAML document; an empty file
 means defaults.
 
+`platforms` decides which machines can use the lock file without changing it.
+Any platform left out gets its hash added by the first `terraform init` that
+runs there, which shows up as lock-file churn, or as a checksum error when
+providers come from a mirror. Each platform listed costs one provider package
+download per upgrade, so a repository that never runs on, say, ARM Linux can
+list only what it uses.
+
 Exclusion patterns use slash-separated repository-relative paths. `*` matches
 within one path segment, while `**` matches zero or more directory levels.
 For example, `modules/**` excludes the root `modules` tree; `**/modules/**`
@@ -45,7 +52,7 @@ The `.git`, `.terraform`, and `node_modules` directories are always skipped.
 | Key | Type | Default | Purpose |
 |---|---|---|---|
 | `exclude` | list of globs | none | Directories to skip, relative to the root |
-| `platforms` | list of `os_arch` | `windows_amd64`, `linux_amd64`, `darwin_amd64`, `darwin_arm64` | Platforms to record lock hashes for |
+| `platforms` | list of `os_arch` | `windows_amd64`, `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64` | Platforms to record lock hashes for |
 | `terraform.binary` | string | `terraform` | Executable to drive: `terraform` or `tofu` |
 | `terraform.fs_mirror` | path | none | Filesystem mirror for `providers lock`; relative to the repository root |
 | `terraform.net_mirror` | HTTPS URL | none | Network mirror for `providers lock` |
