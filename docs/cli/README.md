@@ -110,9 +110,14 @@ Use `--exit-code` in CI to exit `2` when upgrades are available.
 | Flag | Default | Description |
 |---|---|---|
 | `--provider` | all | Only check these providers (repeatable) |
-| `--module` | all | Only check these module paths (repeatable, glob) |
+| `--module` | all | Only check these module paths (repeatable; slash-separated doublestar glob) |
 | `--level` | `major` | Highest level to count: `patch`, `minor` or `major` |
 | `--exit-code` | `false` | Exit `2` when upgrades are available, for CI gating |
+
+`--module` uses slash-separated doublestar globs on every platform. A bare path
+selects only that module; append `/**` to include descendant modules. For
+example, `envs/prod` selects only `envs/prod`, while `envs/prod/**` also selects
+`envs/prod/network`. A filter that matches no modules emits a warning on stderr.
 
 **Examples**
 
@@ -209,7 +214,7 @@ Plans and applies upgrades, then hands the lock file to Terraform (or OpenTofu).
 | Flag | Default | Description |
 |---|---|---|
 | `--provider` | all | Only upgrade these providers (repeatable) |
-| `--module` | all | Only upgrade these module paths (repeatable, glob) |
+| `--module` | all | Only upgrade these module paths (repeatable; slash-separated doublestar glob) |
 | `--level` | `patch` | Highest level to apply: `patch`, `minor` or `major` |
 | `--exact-level` | `false` | Pick the next published release at exactly the selected level; use for progressive stages |
 | `--to` | none | Upgrade to this exact version; requires a single `--provider` |
@@ -226,6 +231,10 @@ Plans and applies upgrades, then hands the lock file to Terraform (or OpenTofu).
 | `--net-mirror` | from config | Fetch provider packages for `providers lock` from this HTTPS network mirror |
 | `--fmt` | `true` | Run `terraform fmt` on modified directories |
 | `--pr-body` | none | Write a pull request description to this file (see [11.3](../ci-cd/README.md#113-raising-pull-requests-automatically)) |
+
+`--module` uses the same glob semantics described for [`check`](#61-provlift-check):
+a bare path selects only that module, and `/**` includes descendants. A filter
+that matches no modules emits a warning on stderr.
 
 **Examples**
 
@@ -348,10 +357,14 @@ Runs `terraform fmt -check` and `terraform validate` in each root module.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--module` | all | Only validate these module paths (repeatable, glob) |
+| `--module` | all | Only validate these module paths (repeatable; slash-separated doublestar glob) |
 | `--plan` | `false` | Also run `terraform plan` |
 | `--backend` | `false` | Initialise the backend during validation |
 | `--no-init` | `false` | Skip init; assumes `.terraform` is already populated |
+
+`--module` uses the same glob semantics described for [`check`](#61-provlift-check):
+a bare path selects only that module, and `/**` includes descendants. A filter
+that matches no modules emits a warning on stderr.
 
 `terraform plan` is opt-in because it needs backend access, state and live
 provider credentials, and it reaches out to real infrastructure. See

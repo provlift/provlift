@@ -225,6 +225,10 @@ Read-only: this command never modifies files.`,
 					return exitWith(ExitError, err)
 				}
 			}
+			modules, err = prepareModuleFilters(ws.inv, modules, g.stderr())
+			if err != nil {
+				return exitWith(ExitError, err)
+			}
 
 			vs := fetchVersions(cmd.Context(), ws.reg, eligibleProviders(ws, selectors, modules), ws.cfg.Platforms)
 			statuses := collectStatuses(ws, vs, selectors, modules, g.includePrerelease)
