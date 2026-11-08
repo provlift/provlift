@@ -7,26 +7,51 @@
 **Keep Terraform and OpenTofu providers current across every module — with
 upgrades you can actually review.**
 
-`provlift` inventories provider requirements, checks the registry for newer
-versions, finds drift between modules, and prepares minimal, reviewable
-provider upgrades. It edits version constraints in place and leaves lock-file
-generation to Terraform or OpenTofu, so checksums are always correct.
-
 [![CI](https://github.com/provlift/provlift/actions/workflows/ci.yml/badge.svg)](https://github.com/provlift/provlift/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/provlift/provlift)](https://github.com/provlift/provlift/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-## Why
+<p align="center">
+  <img src="brand/demo.gif" alt="provlift check lists every provider behind its latest release and names the shared module whose version ceiling blocks an upgrade; provlift upgrade then edits the constraints and regenerates the lock files" width="100%">
+</p>
 
-Keeping providers up to date across dozens of repositories and modules is
-repetitive work that rarely gets prioritised until a major version is overdue.
-General-purpose dependency bots such as Renovate and Dependabot can bump a
-version string, but provider upgrades have Terraform-specific wrinkles they are
-not designed to handle:
+`provlift` finds every provider your modules declare, shows what is newer, and
+upgrades them with the smallest constraint edits that work. Terraform or
+OpenTofu then regenerates the lock files, so checksums are always correct.
+
+## Install
+
+```sh
+go install github.com/provlift/provlift/cmd/provlift@latest
+```
+
+Or download a binary for Linux, macOS or Windows from the
+[releases page](https://github.com/provlift/provlift/releases).
+
+## Try it in two minutes
+
+The [demo repository](https://github.com/provlift/demo) has providers
+deliberately left behind, a shared module that caps an upgrade, and drift
+between environments. It needs no cloud credentials, and provlift never runs
+`apply`.
+
+```sh
+git clone https://github.com/provlift/demo.git provlift-demo && cd provlift-demo
+./setup.sh                                   # or .\setup.ps1 on Windows
+provlift check                               # what is behind, and what blocks it
+provlift upgrade --level minor --provider github --provider random
+git diff                                     # the whole change, ready to review
+```
+
+## Why not Renovate or Dependabot?
+
+They can bump a version string, but provider upgrades have Terraform-specific
+wrinkles they are not designed to handle:
 
 - **Dependency ceilings.** A constraint inside a shared module caps every
   consumer. `provlift` reads local shared modules and the downloaded module
-  tree, never plans a version
-  a dependency forbids, and names the module that is blocking the upgrade.
+  tree, never plans a version a dependency forbids, and names the module that
+  is blocking the upgrade.
 - **Constraint shapes.** `~> 6.0`, `>= 3.85.0`, `>= 3.0, < 4.0` and `= 3.1.0`
   each need a different rewrite — or none at all. `provlift` changes a
   constraint only when it blocks the target, and preserves the author's style.
@@ -66,20 +91,9 @@ not designed to handle:
   AWS, AzureRM, Google, GitHub, Kubernetes and every other provider are handled
   identically; there is no per-provider code.
 
-## Install
-
-```sh
-go install github.com/provlift/provlift/cmd/provlift@latest
-```
-
-Prebuilt binaries for Linux, macOS and Windows are on the
-[releases page](https://github.com/provlift/provlift/releases). See
-[installation](docs/installation/README.md) for pinning, `PATH` setup and
-building from source.
-
 ## Quick start
 
-From the root of a Terraform or OpenTofu repository:
+From the root of your own Terraform or OpenTofu repository:
 
 ```sh
 provlift list                          # what is declared, offline
@@ -92,12 +106,9 @@ git diff                               # review, then open a pull request
 
 Major upgrades require `--allow-major`. Continue with the
 [quick start](docs/quick-start/README.md) and the
-[CLI reference](docs/cli/README.md).
-
-**Try it in two minutes.** The [demo repository](https://github.com/provlift/demo)
-is a small multi-cloud Terraform and OpenTofu setup with providers deliberately
-left behind, a shared module that caps an upgrade, and drift between
-environments. It needs no cloud credentials, and provlift never runs `apply`.
+[CLI reference](docs/cli/README.md). See
+[installation](docs/installation/README.md) for pinning a version, `PATH` setup
+and building from source.
 
 ## Documentation
 
