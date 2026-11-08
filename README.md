@@ -12,7 +12,11 @@ upgrades you can actually review.**
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 <p align="center">
-  <img src="brand/demo.gif" alt="provlift check lists every provider behind its latest release and names the shared module whose version ceiling blocks an upgrade; provlift upgrade then edits the constraints and regenerates the lock files" width="100%">
+  <picture>
+    <!-- Readers who ask for reduced motion get a still frame of the same demo. -->
+    <source media="(prefers-reduced-motion: reduce)" srcset="brand/demo-still.png">
+    <img src="brand/demo.gif" alt="provlift check lists every provider behind its latest release and names the shared module whose version ceiling blocks an upgrade; provlift upgrade then edits the constraints and regenerates the lock files" width="100%">
+  </picture>
 </p>
 
 `provlift` finds every provider your modules declare, shows what is newer, and
@@ -33,7 +37,8 @@ Or download a binary for Linux, macOS or Windows from the
 The [demo repository](https://github.com/provlift/demo) has providers
 deliberately left behind, a shared module that caps an upgrade, and drift
 between environments. It needs no cloud credentials, and provlift never runs
-`apply`.
+`apply`. It does need Terraform 1.6 or later on `PATH`, even if you normally
+use OpenTofu, because its `envs/` roots run Terraform.
 
 ```sh
 git clone https://github.com/provlift/demo.git provlift-demo && cd provlift-demo
