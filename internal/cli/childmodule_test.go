@@ -94,6 +94,122 @@ func TestUpgradeChildConstraintChangeRefreshesEveryConsumingRoot(t *testing.T) {
 	}
 }
 
+type checkJSON struct {
+	Providers []struct {
+		Module              string   `json:"module"`
+		BlockedByDependency bool     `json:"blocked_by_dependency"`
+		ExternalConstraint  string   `json:"external_constraint"`
+		ExternalSources     []string `json:"external_sources"`
+	} `json:"providers"`
+}
+
+func runCheckJSON(t *testing.T, h *harness) checkJSON {
+	t.Helper()
+	h.stdout.Reset()
+	h.opts.jsonOut = true
+	if err := h.run(t, newCheckCommand(h.opts)); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	var result checkJSON
+	if err := json.Unmarshal(h.stdout.Bytes(), &result); err != nil {
+		t.Fatalf("parsing check JSON: %v\n%s", err, h.stdout.String())
+	}
+	return result
+}
+
+// vendoredLocalManifest is the modules.json terraform init writes for a root
+// that calls only the shared local module.
+const vendoredLocalManifest = `{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"shared","Source":"../../modules/shared","Dir":"../../modules/shared"}]}`
+
+func TestCheckAttributesLocalModuleCeilingToCallingRoots(t *testing.T) {
+	// The roots allow 4.81.0 on their own, but the module they both call caps
+	// azurerm below 4.70.0, and Terraform intersects the two.
+	for _, vendored := range []bool{false, true} {
+		repo := sharedChildRepo(">= 4.0, < 4.70.0")
+		if vendored {
+			// Once a root is initialised its modules.json lists the local call.
+			// That must not hide the ceiling the scan already knows about.
+			repo["envs/a"][".terraform/modules/modules.json"] = vendoredLocalManifest
+			repo["envs/b"][".terraform/modules/modules.json"] = vendoredLocalManifest
+		}
+		h := newDriftHarness(t, repo)
+
+		result := runCheckJSON(t, h)
+		for _, provider := range result.Providers {
+			if provider.Module == "modules/shared" {
+				if provider.ExternalConstraint != "" || provider.BlockedByDependency {
+					t.Errorf("vendored=%t: the shared module was capped by its own declaration: %+v", vendored, provider)
+				}
+				continue
+			}
+			if provider.ExternalConstraint != ">= 4.0, < 4.70.0" || !provider.BlockedByDependency ||
+				strings.Join(provider.ExternalSources, ",") != "modules/shared" {
+				t.Errorf("vendored=%t: %s does not report the shared module's ceiling: %+v", vendored, provider.Module, provider)
+			}
+		}
+	}
+}
+
+func TestCheckDoesNotRepeatLocalCeilingRecordedInLock(t *testing.T) {
+	// Terraform folds the shared module's terms into each root's lock file.
+	// Spelled differently there, they must still be reported only once.
+	repo := sharedChildRepo(">= 4.0, < 4.70.0")
+	repo["envs/a"][".terraform.lock.hcl"] = `provider "registry.terraform.io/hashicorp/azurerm" {
+  version     = "4.65.0"
+  constraints = "~> 4.65, >= 4.0.0, < 4.70.0"
+}
+`
+	h := newDriftHarness(t, repo)
+
+	for _, provider := range runCheckJSON(t, h).Providers {
+		if provider.Module == "envs/a" && provider.ExternalConstraint != ">= 4.0, < 4.70.0" {
+			t.Errorf("external_constraint = %q, want %q", provider.ExternalConstraint, ">= 4.0, < 4.70.0")
+		}
+	}
+}
+
+func TestUpgradeNeverPlansPastLocalModuleCeiling(t *testing.T) {
+	// "< 4.70.0" in the shared module forbids 4.81.0. With only the roots
+	// selected, the run cannot lift that ceiling, so the roots must stay put.
+	// Selecting the shared module as well lifts it, which
+	// TestUpgradeRaisingSharedCeilingPlansTheRootsToo covers.
+	h := newDriftHarness(t, sharedChildRepo(">= 4.0, < 4.70.0"))
+
+	result := runUpgradeJSON(t, h, "--provider", "azurerm", "--level", "minor", "--dry-run", "--module", "envs/*")
+	for _, action := range result.Plan.Actions {
+		t.Errorf("planned %s -> %s past the shared module's ceiling", action.Module, action.To)
+	}
+	for _, root := range []string{"envs/a", "envs/b"} {
+		blamed := false
+		for _, skip := range result.Plan.Skipped {
+			blamed = blamed || (skip.Module == root && strings.Contains(skip.Reason, "< 4.70.0"))
+		}
+		if !blamed {
+			t.Errorf("%s was not skipped with the ceiling as its reason: %+v", root, result.Plan.Skipped)
+		}
+	}
+}
+
+func TestUpgradeRaisingSharedCeilingPlansTheRootsToo(t *testing.T) {
+	// One run rewrites the shared module's "~> 4.65.0" to admit 4.81.0. The
+	// roots are judged against the ceiling as it will stand, so they are
+	// planned too rather than reported as blocked by the module being lifted.
+	h := newDriftHarness(t, sharedChildRepo("~> 4.65.0"))
+	useFakeTerraform(t, h)
+
+	result := runUpgradeJSON(t, h, "--provider", "azurerm", "--to", "4.81.0", "--level", "minor")
+
+	planned := map[string]string{}
+	for _, action := range result.Plan.Actions {
+		planned[action.Module] = action.To
+	}
+	for _, module := range []string{"envs/a", "envs/b", "modules/shared"} {
+		if planned[module] != "4.81.0" {
+			t.Errorf("%s was not planned to 4.81.0: actions %+v, skipped %+v", module, result.Plan.Actions, result.Plan.Skipped)
+		}
+	}
+}
+
 func TestUpgradeRepeatedRunWithChildModulePlansNothing(t *testing.T) {
 	// "~> 4.0" already admits 4.81.0, so the child needs no edit and has no
 	// lock file to move. Once the roots are at the target, a repeat of the

@@ -121,6 +121,77 @@ func TestLoadIgnoresLocalModules(t *testing.T) {
 	}
 }
 
+func TestLocalLabelsModulesByRepositoryPath(t *testing.T) {
+	addr := azurerm(t)
+	reqs := Local([]*model.Module{
+		{Dir: "/repo/modules/network", RelDir: "modules/network", Requirements: []model.ProviderRequirement{
+			{Address: addr, Constraint: "< 4.70.0"},
+		}},
+		{Dir: "/repo/modules/bare", RelDir: "modules/bare", Requirements: []model.ProviderRequirement{
+			{Address: addr},
+		}},
+	})
+
+	if len(reqs) != 1 {
+		t.Fatalf("Local() = %+v, want only the module declaring a constraint", reqs)
+	}
+	if got := reqs[0].Label(); got != "modules/network" {
+		t.Errorf("Label() = %q, want the repository path", got)
+	}
+	if reqs[0].Dir != "/repo/modules/network" {
+		t.Errorf("Dir = %q, want the module's directory", reqs[0].Dir)
+	}
+}
+
+func TestSelectionsReadsResolvedVersions(t *testing.T) {
+	root := vendored(t, map[string]string{
+		"vpc": "registry.terraform.io/acme/vpc/aws|",
+	})
+	got, recorded, err := Selections(root)
+	if err != nil || !recorded {
+		t.Fatalf("Selections() = %v, %t, %v; want a recorded manifest", got, recorded, err)
+	}
+	if _, isRoot := got[""]; isRoot || got["vpc"].Source != "registry.terraform.io/acme/vpc/aws" {
+		t.Errorf("Selections() = %+v, want the vpc call and not the root itself", got)
+	}
+
+	if _, recorded, err := Selections(t.TempDir()); recorded || err != nil {
+		t.Errorf("an uninitialised root reported recorded=%t, err=%v", recorded, err)
+	}
+}
+
+func TestSelectionsHonoursTFDataDir(t *testing.T) {
+	// TF_DATA_DIR moves the whole data directory. Terraform reads a relative
+	// value against the root module, and an absolute one as is.
+	manifest := `{"Modules":[{"Key":"","Source":"","Dir":"."},` +
+		`{"Key":"vpc","Source":"registry.terraform.io/acme/vpc/aws","Version":"5.4.0","Dir":"x"}]}`
+	write := func(dir string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(dir, "modules"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "modules", "modules.json"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	root := t.TempDir()
+	write(filepath.Join(root, "tfdata"))
+	absolute := t.TempDir()
+	write(absolute)
+
+	for _, dataDir := range []string{"tfdata", absolute} {
+		t.Setenv("TF_DATA_DIR", dataDir)
+		got, recorded, err := Selections(root)
+		if err != nil || !recorded || got["vpc"].Version != "5.4.0" {
+			t.Errorf("TF_DATA_DIR=%s: Selections() = %+v, %t, %v", dataDir, got, recorded, err)
+		}
+		if !Vendored(root) {
+			t.Errorf("TF_DATA_DIR=%s: Vendored() = false", dataDir)
+		}
+	}
+}
+
 func TestLoadSkipsModulesDeclaringNoConstraint(t *testing.T) {
 	root := vendored(t, map[string]string{
 		"bare": "git::https://github.com/acme/mod.git?ref=v1.0.0|",

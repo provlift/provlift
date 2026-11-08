@@ -15,8 +15,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/zclconf/go-cty/cty"
 
+	"github.com/provlift/provlift/internal/depgraph"
 	"github.com/provlift/provlift/internal/lockfile"
 	"github.com/provlift/provlift/internal/model"
+	"github.com/provlift/provlift/internal/pullrequest"
 	"github.com/provlift/provlift/internal/report"
 	"github.com/provlift/provlift/internal/terraform"
 	"github.com/provlift/provlift/internal/upgrade"
@@ -41,7 +43,10 @@ func newRunner(ws *workspace, g *globalOptions) (*terraform.Runner, error) {
 // providers and rewrites the lock file, providers lock then widens the recorded
 // hashes to every configured platform, and validate confirms the configuration
 // still loads against the new provider schemas.
-func applyTerraform(ctx context.Context, g *globalOptions, ws *workspace, plan *upgrade.Plan, opts *upgradeOptions, changedFiles []string) ([]runRecord, error) {
+//
+// init -upgrade re-resolves module versions too. Whatever moved is recorded in
+// modules, since nothing in the lock file or the diff would show it.
+func applyTerraform(ctx context.Context, g *globalOptions, ws *workspace, plan *upgrade.Plan, opts *upgradeOptions, changedFiles []string, modules *pullrequest.ModuleVersions) ([]runRecord, error) {
 	runner, err := newRunner(ws, g)
 	if err != nil {
 		return nil, err
@@ -129,11 +134,13 @@ func applyTerraform(ctx context.Context, g *globalOptions, ws *workspace, plan *
 	}
 
 	if opts.runFmt {
-		// Only directories that were actually edited are formatted. Running fmt
-		// elsewhere could pull unrelated pre-existing drift into the diff.
+		// Only the files that were actually edited are formatted. A recursive
+		// fmt of their directories would also rewrite pre-existing drift in
+		// sibling files and nested modules, pulling unrelated changes into
+		// the diff.
 		for _, dir := range editedDirs(changedFiles) {
 			announce(relTo(ws.root, dir), "fmt")
-			res, err := runner.Fmt(ctx, dir)
+			res, err := runner.Fmt(ctx, dir, editedFileNames(changedFiles, dir)...)
 			if err != nil {
 				return runs, err
 			}
@@ -147,8 +154,15 @@ func applyTerraform(ctx context.Context, g *globalOptions, ws *workspace, plan *
 		if readErr != nil && !os.IsNotExist(readErr) {
 			return runs, fmt.Errorf("reading original lock for %s: %w", root.RelDir, readErr)
 		}
+		// An unreadable manifest is treated like a missing one: there is no
+		// trustworthy baseline to compare against.
+		before, hadBaseline, beforeErr := depgraph.Selections(root.Dir)
 		announce(root.RelDir, "init -upgrade")
 		res, err := initWithPlannedProviders(ctx, runner, root, allowed[root.Dir], opts.backend)
+		// Terraform installs modules before it resolves providers, and
+		// restoring the lock file does not put the old modules back, so an
+		// init that fails part-way can still have moved them.
+		recordModuleChanges(modules, root, before, hadBaseline && beforeErr == nil)
 		if err != nil {
 			return runs, restoreLockAfterFailure(root, original, readErr == nil, err)
 		}
@@ -166,7 +180,7 @@ func applyTerraform(ctx context.Context, g *globalOptions, ws *workspace, plan *
 
 		if len(platforms) > 0 {
 			announce(root.RelDir, "providers lock")
-			res, err := runner.ProvidersLock(ctx, root.Dir, platforms)
+			res, err := runner.ProvidersLock(ctx, root.Dir, platforms, opts.lockMirror)
 			if err != nil {
 				return runs, restoreLockAfterFailure(root, original, readErr == nil, err)
 			}
@@ -326,6 +340,18 @@ func restoreOriginalLock(root *model.Module, original []byte, hadLock bool) erro
 	return err
 }
 
+// editedFileNames returns the base names of the given files that live in dir,
+// so fmt can be pointed at exactly the files that were edited.
+func editedFileNames(files []string, dir string) []string {
+	var out []string
+	for _, f := range files {
+		if filepath.Dir(f) == dir {
+			out = append(out, filepath.Base(f))
+		}
+	}
+	return out
+}
+
 // editedDirs returns the distinct directories containing the given files.
 func editedDirs(files []string) []string {
 	seen := map[string]bool{}
@@ -477,6 +503,78 @@ during an upgrade. Use --plan to opt in.`,
 	f.BoolVar(&backend, "backend", false, "initialise the backend during validation")
 	f.BoolVar(&noInit, "no-init", false, "skip init; assumes .terraform is already populated")
 	return cmd
+}
+
+// recordModuleChanges compares a root's module selections after init -upgrade
+// with those recorded before it. Local and git sources carry no version, so
+// only registry modules can be seen to move.
+func recordModuleChanges(modules *pullrequest.ModuleVersions, root *model.Module, before map[string]depgraph.Selection, hadBaseline bool) {
+	after, _, err := depgraph.Selections(root.Dir)
+	if err != nil {
+		return
+	}
+
+	if !hadBaseline {
+		for _, selection := range after {
+			if selection.Version != "" {
+				modules.NoBaseline = append(modules.NoBaseline, root.RelDir)
+				return
+			}
+		}
+		return
+	}
+
+	keys := make([]string, 0, len(before)+len(after))
+	for key := range before {
+		keys = append(keys, key)
+	}
+	for key := range after {
+		if _, seen := before[key]; !seen {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		old, now := before[key], after[key]
+		if old.Version == now.Version {
+			continue
+		}
+		source := now.Source
+		if source == "" {
+			source = old.Source
+		}
+		modules.Changes = append(modules.Changes, pullrequest.ModuleChange{
+			Root: root.RelDir, Module: key, Source: source, From: old.Version, To: now.Version,
+		})
+	}
+}
+
+// printModuleVersions reports module selections that init -upgrade moved, and
+// roots where that could not be determined.
+func printModuleVersions(g *globalOptions, modules pullrequest.ModuleVersions) {
+	if len(modules.Changes) == 0 && len(modules.NoBaseline) == 0 {
+		return
+	}
+	report.Section(g.stdout(), "Module versions")
+	if len(modules.Changes) > 0 {
+		rows := make([][]string, 0, len(modules.Changes))
+		for _, c := range modules.Changes {
+			rows = append(rows, []string{c.Root, c.Module, c.Source, orDash(c.From), orDash(c.To)})
+		}
+		_ = report.Table(g.stdout(), []string{"ROOT", "MODULE", "SOURCE", "FROM", "TO"}, rows)
+		fmt.Fprintln(g.stdout(), "\nterraform init -upgrade also moved these modules.")
+	}
+	for _, root := range modules.NoBaseline {
+		fmt.Fprintf(g.stdout(), "%s: no earlier module selection was recorded, so module changes could not be detected.\n", root)
+	}
+}
+
+func orDash(v string) string {
+	if v == "" {
+		return "-"
+	}
+	return v
 }
 
 func printRuns(g *globalOptions, runs []runRecord) {

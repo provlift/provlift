@@ -24,7 +24,8 @@ version string, but provider upgrades have Terraform-specific wrinkles they are
 not designed to handle:
 
 - **Dependency ceilings.** A constraint inside a shared module caps every
-  consumer. `provlift` reads the downloaded module tree, never plans a version
+  consumer. `provlift` reads local shared modules and the downloaded module
+  tree, never plans a version
   a dependency forbids, and names the module that is blocking the upgrade.
 - **Constraint shapes.** `~> 6.0`, `>= 3.85.0`, `>= 3.0, < 4.0` and `= 3.1.0`
   each need a different rewrite — or none at all. `provlift` changes a
@@ -93,6 +94,11 @@ Major upgrades require `--allow-major`. Continue with the
 [quick start](docs/quick-start/README.md) and the
 [CLI reference](docs/cli/README.md).
 
+**Try it in two minutes.** The [demo repository](https://github.com/provlift/demo)
+is a small multi-cloud Terraform and OpenTofu setup with providers deliberately
+left behind, a shared module that caps an upgrade, and drift between
+environments. It needs no cloud credentials, and provlift never runs `apply`.
+
 ## Documentation
 
 | Topic | Guide |
@@ -118,6 +124,12 @@ A searchable command overview is published at
 versions, change resources, or run `apply`.
 
 ## Contributing
+
+**Tried provlift?** Tell us how it went, including what worked, what broke and
+what is missing, in the
+[welcome discussion](https://github.com/provlift/provlift/discussions/9) or by
+[opening an issue](https://github.com/provlift/provlift/issues/new/choose).
+Reports from real repositories are the most useful feedback the project gets.
 
 Bug reports, feature requests and pull requests are welcome. Please read
 [CONTRIBUTING.md](https://github.com/provlift/provlift/blob/main/CONTRIBUTING.md)

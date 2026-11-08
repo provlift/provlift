@@ -29,6 +29,26 @@ type TerraformRun struct {
 	OK      bool   `json:"ok"`
 }
 
+// ModuleChange is a module call whose resolved version moved while Terraform
+// re-initialised a root. `init -upgrade` re-resolves modules as well as
+// providers, and nothing in the lock file records it.
+type ModuleChange struct {
+	Root   string `json:"root"`
+	Module string `json:"module"`
+	Source string `json:"source"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+}
+
+// ModuleVersions is what the upgrade learned about module selections.
+type ModuleVersions struct {
+	Changes []ModuleChange `json:"changes"`
+
+	// NoBaseline lists roots that call versioned modules but had no recorded
+	// selection before the upgrade, so a change could not be detected.
+	NoBaseline []string `json:"no_baseline"`
+}
+
 // Request is everything needed to raise a pull request.
 type Request struct {
 	Branch string   `json:"branch"`
@@ -43,6 +63,12 @@ type Request struct {
 // than from the time of the run, so re-running the same upgrade updates the
 // existing pull request instead of opening a second one.
 func Build(plan *upgrade.Plan, runs []TerraformRun, changedFiles []string) Request {
+	return BuildWithModules(plan, runs, changedFiles, ModuleVersions{})
+}
+
+// BuildWithModules is Build for a run that re-initialised roots, reporting the
+// module versions that moved along the way.
+func BuildWithModules(plan *upgrade.Plan, runs []TerraformRun, changedFiles []string, modules ModuleVersions) Request {
 	providers := distinctProviders(plan)
 
 	req := Request{
@@ -50,7 +76,7 @@ func Build(plan *upgrade.Plan, runs []TerraformRun, changedFiles []string) Reque
 		Title:  title(plan, providers),
 		Labels: labels(plan),
 	}
-	req.Body = body(plan, providers, runs, changedFiles)
+	req.Body = body(plan, providers, runs, changedFiles, modules)
 	return req
 }
 
@@ -167,7 +193,7 @@ func labels(plan *upgrade.Plan) []string {
 	return out
 }
 
-func body(plan *upgrade.Plan, providers []providerChange, runs []TerraformRun, changedFiles []string) string {
+func body(plan *upgrade.Plan, providers []providerChange, runs []TerraformRun, changedFiles []string, modules ModuleVersions) string {
 	var b strings.Builder
 
 	if len(plan.Actions) == 0 {
@@ -229,6 +255,28 @@ func body(plan *upgrade.Plan, providers []providerChange, runs []TerraformRun, c
 		}
 	}
 
+	if len(modules.Changes) > 0 || len(modules.NoBaseline) > 0 {
+		b.WriteString("\n## Module versions\n\n")
+		b.WriteString("`init -upgrade` re-resolves modules as well as providers. Module selections\n")
+		b.WriteString("are not committed, so CI resolves them on its own, but any Terraform commands\n")
+		b.WriteString("listed above ran against these.\n")
+	}
+	if len(modules.Changes) > 0 {
+		b.WriteString("\n| Root | Module | Source | From | To |\n")
+		b.WriteString("|---|---|---|---|---|\n")
+		for _, c := range modules.Changes {
+			fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | %s | %s |\n",
+				c.Root, c.Module, c.Source, orNone(c.From), orNone(c.To))
+		}
+	}
+	if len(modules.NoBaseline) > 0 {
+		b.WriteString("\nNo earlier module selection was recorded for these roots, so changes could\n")
+		b.WriteString("not be detected:\n\n")
+		for _, root := range modules.NoBaseline {
+			fmt.Fprintf(&b, "- `%s`\n", root)
+		}
+	}
+
 	if skipped := blockedByDependency(plan); len(skipped) > 0 {
 		b.WriteString("\n## Not upgraded further\n\n")
 		b.WriteString("These providers are held below their newest release by a constraint\n")
@@ -242,6 +290,14 @@ func body(plan *upgrade.Plan, providers []providerChange, runs []TerraformRun, c
 	b.WriteString("Version constraints were edited only where they would otherwise block the ")
 	b.WriteString("target version; everything else was left untouched.\n")
 	return b.String()
+}
+
+// orNone renders a module version that was absent on one side of a change.
+func orNone(v string) string {
+	if v == "" {
+		return "(none)"
+	}
+	return v
 }
 
 func blockedByDependency(plan *upgrade.Plan) []upgrade.Skip {

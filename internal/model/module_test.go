@@ -91,6 +91,26 @@ func TestAffectedRootsFansOutToEveryConsumer(t *testing.T) {
 	}
 }
 
+func TestLocalDescendantsFollowsNestedCalls(t *testing.T) {
+	// A root's provider constraints intersect with every local module beneath
+	// it, however deep, but not with the root itself or with modules it never
+	// calls. The b -> a call closes a cycle that must not loop forever.
+	inv := &Inventory{Modules: []*Module{
+		module("envs/prod", true, "modules/a"),
+		module("modules/a", false, "modules/b"),
+		module("modules/b", false, "modules/a"),
+		module("modules/unused", false),
+	}}
+
+	got := relDirs(inv.LocalDescendants("envs/prod"))
+	if len(got) != 2 || !contains(got, "modules/a") || !contains(got, "modules/b") {
+		t.Errorf("LocalDescendants() = %v, want [modules/a modules/b]", got)
+	}
+	if got := inv.LocalDescendants("modules/unused"); len(got) != 0 {
+		t.Errorf("LocalDescendants() = %v for a module calling nothing", relDirs(got))
+	}
+}
+
 func TestAffectedRootsTerminatesOnCycles(t *testing.T) {
 	// Terraform rejects module cycles, but a malformed repository must not
 	// cause the scan to recurse forever.

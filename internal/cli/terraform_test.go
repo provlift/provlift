@@ -12,6 +12,7 @@ import (
 	"github.com/provlift/provlift/internal/discovery"
 	"github.com/provlift/provlift/internal/lockfile"
 	"github.com/provlift/provlift/internal/model"
+	"github.com/provlift/provlift/internal/pullrequest"
 	"github.com/provlift/provlift/internal/terraform"
 	"github.com/provlift/provlift/internal/upgrade"
 )
@@ -27,6 +28,7 @@ const (
 	fakeUnexpectedProvider = "PROVLIFT_CLI_FAKE_UNEXPECTED_PROVIDER"
 	fakeExceedsTarget      = "PROVLIFT_CLI_FAKE_EXCEEDS_TARGET"
 	fakeLockSnapshot       = "PROVLIFT_CLI_FAKE_LOCK_SNAPSHOT"
+	fakeModuleManifest     = "PROVLIFT_CLI_FAKE_MODULES"
 )
 
 func TestMain(m *testing.M) {
@@ -53,6 +55,18 @@ func runFakeTerraform() int {
 			cwd, _ := os.Getwd()
 			fmt.Fprintf(f, "%s\t%s\n", filepath.Base(cwd), strings.Join(args, " "))
 			f.Close()
+		}
+	}
+
+	// init -upgrade re-resolves modules before providers, so the manifest it
+	// writes survives even a simulated init failure.
+	if manifest := os.Getenv(fakeModuleManifest); command == "init" && manifest != "" {
+		dir := filepath.Join(".terraform", "modules")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return 1
+		}
+		if err := os.WriteFile(filepath.Join(dir, "modules.json"), []byte(manifest), 0o644); err != nil {
+			return 1
 		}
 	}
 
@@ -397,7 +411,7 @@ func TestSyntheticChildActionDoesNotDowngradeRootLock(t *testing.T) {
 		ModuleDir: h.dir, Address: address, Level: upgrade.LevelNone,
 		From: "3.85.0", To: "3.85.0",
 	}}}
-	if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil); err != nil {
+	if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil, &pullrequest.ModuleVersions{}); err != nil {
 		t.Fatal(err)
 	}
 	locks, _, err := lockfile.Read(h.dir)
@@ -424,7 +438,7 @@ func TestSyntheticChildActionDoesNotOverrideRealTarget(t *testing.T) {
 		{ModuleDir: h.dir, Address: address, Level: upgrade.LevelMajor, From: "4.65.0", To: "5.6.0"},
 		{ModuleDir: h.dir, Address: address, Level: upgrade.LevelNone, From: "3.85.0", To: "3.85.0"},
 	}}
-	if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil); err != nil {
+	if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil, &pullrequest.ModuleVersions{}); err != nil {
 		t.Fatal(err)
 	}
 	locks, _, err := lockfile.Read(h.dir)
@@ -470,7 +484,7 @@ func TestChildUpgradeCannotLowerConsumingRootTarget(t *testing.T) {
 				ModuleDir: childDir, Address: address, Level: upgrade.LevelPatch,
 				From: "3.85.0", To: "3.85.1",
 			})
-			if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil); err != nil {
+			if _, err := applyTerraform(context.Background(), h.opts, ws, plan, &upgradeOptions{skipValidate: true}, nil, &pullrequest.ModuleVersions{}); err != nil {
 				t.Fatal(err)
 			}
 			locks, _, err := lockfile.Read(h.dir)
@@ -562,6 +576,52 @@ func TestUpgradeNoFmtFlag(t *testing.T) {
 		if strings.Contains(c, "\tfmt") {
 			t.Errorf("--fmt=false did not suppress terraform fmt: %q", c)
 		}
+	}
+}
+
+func TestUpgradeFmtTargetsEditedFilesOnly(t *testing.T) {
+	h := newHarness(t, map[string]string{
+		// Pre-existing drift in a sibling file and in a nested module must not
+		// be pulled into the upgrade diff by the post-edit fmt step.
+		"drift.tf":            "variable \"drift\" {\n  type = string\n}\n",
+		"modules/net/vars.tf": "variable \"net_cidr\" {\n  default = \"a\"\n}\n",
+	})
+	logPath := useFakeTerraform(t, h)
+
+	err := h.run(t, newUpgradeCommand(h.opts),
+		"--provider", "azurerm", "--to", "5.6.0", "--level", "major", "--allow-major")
+	if err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+
+	var fmtCalls []string
+	for _, c := range readInvocations(t, logPath) {
+		if strings.Contains(c, "\tfmt") {
+			fmtCalls = append(fmtCalls, c)
+		}
+	}
+	if len(fmtCalls) != 1 {
+		t.Fatalf("expected one fmt invocation, got %d:\n%s", len(fmtCalls), strings.Join(fmtCalls, "\n"))
+	}
+	if strings.Contains(fmtCalls[0], "-recursive") {
+		t.Errorf("post-edit fmt must not recurse into nested modules: %q", fmtCalls[0])
+	}
+	if !strings.Contains(fmtCalls[0], " ./main.tf") {
+		t.Errorf("fmt must target the edited file: %q", fmtCalls[0])
+	}
+	for _, untouched := range []string{"drift.tf", "vars.tf", "modules"} {
+		if strings.Contains(fmtCalls[0], untouched) {
+			t.Errorf("fmt must not target unedited %s: %q", untouched, fmtCalls[0])
+		}
+	}
+
+	// The unformatted file in the nested module is byte-identical afterwards.
+	got, err := os.ReadFile(filepath.Join(h.dir, "modules", "net", "vars.tf"))
+	if err != nil {
+		t.Fatalf("reading nested module file: %v", err)
+	}
+	if want := "variable \"net_cidr\" {\n  default = \"a\"\n}\n"; string(got) != want {
+		t.Errorf("nested module file was rewritten:\n%s", got)
 	}
 }
 

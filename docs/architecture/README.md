@@ -116,7 +116,14 @@ Constraints intersect across the whole module tree. A ceiling inside a consumed
 module binds this repository even though nothing here declares it. Reported as
 `BLOCKED = dep`, with the imposing modules named.
 
-**Naming the module requires the module tree to be on disk.** On a fresh
+A shared module inside the repository (a local `source = "../modules/x"`) binds
+every root that calls it, directly or through other local modules, in the same
+way. The repository scan already reads those modules, so their ceilings are
+known and attributed by path on any checkout. When one run also raises a shared
+module's own ceiling, the roots that call it are planned against the ceiling as
+it will stand after the edit.
+
+**Naming a downloaded module requires the module tree to be on disk.** On a fresh
 checkout nothing has been vendored, so provlift falls back to the constraints
 Terraform recorded in `.terraform.lock.hcl`: the ceiling is still reported as
 `BLOCKED = dep`, but without the module that imposes it. Without a lock file the
@@ -208,9 +215,10 @@ Two consequences follow:
 
 Repository `.provlift.yaml` can select only `terraform` or `tofu` by name;
 arbitrary commands and paths are rejected. For a custom binary, the operator
-must supply `--terraform-binary` explicitly, or use `PROVLIFT_TERRAFORM_BIN`
-when the repository config leaves the default `terraform` selected. The flag
-has precedence over both the environment variable and repository config.
+must supply `--terraform-binary` explicitly, or set `PROVLIFT_TERRAFORM_BIN`.
+The precedence is **CLI flag > environment variable > repository config >
+default (`terraform`)**. This prevents a repository's `terraform.binary: tofu`
+from overriding an operator's trusted environment-selected executable.
 
 ### Other documented gaps
 
@@ -245,6 +253,7 @@ also exit nonzero and are reported on stderr:
   "plan": { "actions": [], "skipped": [] },
   "changed_files": [],
   "terraform_runs": [],
+  "module_versions": { "changes": [], "no_baseline": [] },
   "pull_request": { "branch": "", "title": "", "labels": [], "body": "" }
 }
 ```
@@ -252,6 +261,20 @@ also exit nonzero and are reported on stderr:
 `changed_files` lists repository-relative constraint files edited by provlift and
 lock files whose contents differ after Terraform runs. A lock file restored
 after a failed Terraform step is not reported as changed.
+
+`module_versions` reports module calls whose resolved version moved during
+`init -upgrade`, which re-resolves modules as well as providers. Each change
+names the root, the module call, its source and the versions before and after.
+Module selections live in `.terraform/modules/modules.json`, which is not
+committed, so the diff never shows them, but later Terraform steps run against
+them. Selections are compared even when `init` fails, since Terraform installs
+modules before resolving providers and restoring the lock file does not undo
+that. `TF_DATA_DIR` is honoured when locating the manifest.
+Only registry modules record a version; local and git sources are fixed by
+their path or ref. `no_baseline` lists roots that call versioned modules but
+had no earlier selection on disk, such as a fresh checkout, where a change
+cannot be detected. The same information appears in the text output and in
+the generated pull request description.
 
 ### Pull request metadata
 

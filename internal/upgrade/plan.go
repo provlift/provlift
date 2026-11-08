@@ -274,6 +274,15 @@ func filterPrerelease(in []*version.Version, include bool) []*version.Version {
 	return out
 }
 
+func containsVersion(candidates []*version.Version, target *version.Version) bool {
+	for _, candidate := range candidates {
+		if candidate.Equal(target) {
+			return true
+		}
+	}
+	return false
+}
+
 // Action is a single planned provider change in a single module.
 type Action struct {
 	Module    string        `json:"module"`
@@ -374,6 +383,9 @@ func PlanAction(mod *model.Module, st *Status, candidates []*version.Version, op
 	}
 	if opts.Explicit != nil && IsPrerelease(opts.Explicit) && !opts.IncludePrerelease {
 		return nil, "prerelease targets require --include-prerelease", nil
+	}
+	if opts.Explicit != nil && !containsVersion(candidates, opts.Explicit) {
+		return nil, "", fmt.Errorf("%s is not a published version of %s", opts.Explicit, st.Source)
 	}
 
 	// A dependency's constraint applies to the whole module tree, so a version

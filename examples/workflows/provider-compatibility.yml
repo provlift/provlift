@@ -70,7 +70,7 @@ permissions:
   pull-requests: write
 
 env:
-  PROVLIFT_VERSION: ${{ vars.PROVLIFT_VERSION || 'v0.1.0' }} # x-release-please-version
+  PROVLIFT_VERSION: ${{ vars.PROVLIFT_VERSION || 'v0.2.0' }} # x-release-please-version
   GO_VERSION: "1.26"
   # Free-form, so it reaches the shell only through the environment and is
   # validated before use.
@@ -89,13 +89,13 @@ jobs:
       title: ${{ steps.attempt.outputs.title }}
       labels: ${{ steps.attempt.outputs.labels }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           terraform_wrapper: false
 
@@ -312,7 +312,7 @@ jobs:
                   [.providers[]? | select(.module == "." and .is_root and .source == $source)] as $providers
                   | ($providers | length) > 0 and all($providers[]; .locked == $target)
                 ' <<< "$requirements" > /dev/null &&
-                  jq -e --arg module "$module_dir" 'any(.terraform_runs[]?; .module == $module and .command == "validate" and .ok)' "$RUNNER_TEMP/result.json" > /dev/null; then
+                  jq -e --arg module_dir "$module_dir" 'any(.terraform_runs[]?; .module == $module_dir and .command == "validate" and .ok)' "$RUNNER_TEMP/result.json" > /dev/null; then
                   continue
                 fi
                 validate_exact_target "$module_dir"
@@ -358,7 +358,7 @@ jobs:
             echo '> older one. Release this module as a new major version.'
           } >> "$RUNNER_TEMP/pr-body.md"
 
-      - uses: peter-evans/create-pull-request@v6
+      - uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c # v6.1.0
         if: steps.attempt.outputs.changed != '0'
         with:
           branch: ${{ steps.attempt.outputs.branch }}

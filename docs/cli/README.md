@@ -20,11 +20,14 @@ Available on every command.
 | `-C`, `--dir` | `.` | Repository directory to scan |
 | `--json` | `false` | Emit machine-readable JSON instead of a table |
 | `--exclude` | none | Glob of directories to skip (repeatable; a comma is part of the glob, as in `modules/{a,b}`) |
-| `--terraform-binary` | `terraform` | Executable to drive, for example `tofu` for OpenTofu; also `PROVLIFT_TERRAFORM_BIN` |
+| `--terraform-binary` | `terraform` | Executable to drive, for example `tofu` for OpenTofu; overrides `PROVLIFT_TERRAFORM_BIN` and repository config |
 | `--timeout` | `15m` | Timeout for a single Terraform command |
 | `--include-prerelease` | `false` | Consider prerelease provider versions |
 
 Use the command-specific sections below for complete invocations and examples.
+Executable precedence: **`--terraform-binary` > `PROVLIFT_TERRAFORM_BIN` >
+`.provlift.yaml` `terraform.binary` > default `terraform`**. The environment
+variable overrides repository selection of either `terraform` or `tofu`.
 Cobra also supplies `provlift help <command>` and `provlift completion <shell>`
 for shell autocompletion.
 
@@ -227,6 +230,8 @@ Plans and applies upgrades, then hands the lock file to Terraform (or OpenTofu).
 | `--skip-validate` | `false` | Do not run `terraform validate` afterwards |
 | `--backend` | `false` | Initialise the backend (needs state access and credentials) |
 | `--platforms` | from config | Platforms to record lock hashes for |
+| `--fs-mirror` | from config | Fetch provider packages for `providers lock` from this filesystem mirror directory |
+| `--net-mirror` | from config | Fetch provider packages for `providers lock` from this HTTPS network mirror |
 | `--fmt` | `true` | Run `terraform fmt` on modified directories |
 | `--pr-body` | none | Write a pull request description to this file (see [11.3](../ci-cd/README.md#113-raising-pull-requests-automatically)) |
 
@@ -257,6 +262,9 @@ provlift upgrade --level patch --module "envs/*"
 
 # Lock for Linux CI only, to avoid downloading every platform
 provlift upgrade --level patch --platforms linux_amd64
+
+# Air-gapped runner: lock from a provider mirror instead of the public registry
+provlift upgrade --level patch --fs-mirror /srv/terraform-providers
 
 # Raise a shared module's supported minimum
 provlift upgrade --provider aws --level major --exact-level --allow-major --raise-floor

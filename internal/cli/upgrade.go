@@ -17,7 +17,9 @@ import (
 	"github.com/provlift/provlift/internal/lockfile"
 	"github.com/provlift/provlift/internal/model"
 	"github.com/provlift/provlift/internal/pullrequest"
+	"github.com/provlift/provlift/internal/registry"
 	"github.com/provlift/provlift/internal/report"
+	"github.com/provlift/provlift/internal/terraform"
 	"github.com/provlift/provlift/internal/upgrade"
 )
 
@@ -36,8 +38,14 @@ type upgradeOptions struct {
 	skipValidate     bool
 	backend          bool
 	platforms        []string
+	fsMirror         string
+	netMirror        string
 	runFmt           bool
 	prBody           string
+
+	// lockMirror is the mirror providers lock uses, resolved from the flags
+	// or, failing those, the configuration.
+	lockMirror terraform.LockMirror
 }
 
 func newUpgradeCommand(g *globalOptions) *cobra.Command {
@@ -95,6 +103,8 @@ Major upgrades may contain breaking changes and therefore require the explicit
 	f.BoolVar(&opts.skipValidate, "skip-validate", false, "do not run terraform validate after upgrading")
 	f.BoolVar(&opts.backend, "backend", false, "initialise the backend (needs state access and credentials)")
 	f.StringSliceVar(&opts.platforms, "platforms", nil, "platforms to record lock hashes for (default: from config)")
+	f.StringVar(&opts.fsMirror, "fs-mirror", "", "fetch provider packages for the lock file from this filesystem mirror (default: from config)")
+	f.StringVar(&opts.netMirror, "net-mirror", "", "fetch provider packages for the lock file from this HTTPS network mirror (default: from config)")
 	f.BoolVar(&opts.runFmt, "fmt", true, "run terraform fmt on modified directories")
 	f.StringVar(&opts.prBody, "pr-body", "", "write a pull request description to this file")
 	return cmd
@@ -107,7 +117,10 @@ func upgradeResult(dryRun bool) map[string]any {
 		"plan":           emptyPlan,
 		"changed_files":  []string{},
 		"terraform_runs": []any{},
-		"pull_request":   pullrequest.Build(emptyPlan, nil, nil),
+		"module_versions": pullrequest.ModuleVersions{
+			Changes: []pullrequest.ModuleChange{}, NoBaseline: []string{},
+		},
+		"pull_request": pullrequest.Build(emptyPlan, nil, nil),
 	}
 }
 
@@ -121,6 +134,11 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 		}
 	}()
 	ctx := cmd.Context()
+	// Refuse unusable mirror flags before recovery can rewrite any file, so a
+	// refused invocation leaves the repository exactly as it found it.
+	if err := checkMirrorFlags(opts); err != nil {
+		return exitWith(ExitError, err)
+	}
 	if !opts.dryRun {
 		root, err := filepath.Abs(g.dir)
 		if err != nil {
@@ -169,6 +187,10 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 		}
 	}
 	if opts.modules, err = prepareModuleFilters(ws.inv, opts.modules, g.stderr()); err != nil {
+		return exitWith(ExitError, err)
+	}
+
+	if opts.lockMirror, err = resolveLockMirror(ws, opts); err != nil {
 		return exitWith(ExitError, err)
 	}
 
@@ -260,8 +282,10 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 		result["pull_request"] = pullrequest.Build(plan, nil, reportedFiles)
 		return exitWith(ExitError, err)
 	}
-	runs, runErr := applyTerraform(ctx, g, ws, plan, opts, changedFiles)
+	modules := pullrequest.ModuleVersions{Changes: []pullrequest.ModuleChange{}, NoBaseline: []string{}}
+	runs, runErr := applyTerraform(ctx, g, ws, plan, opts, changedFiles, &modules)
 	result["terraform_runs"] = runs
+	result["module_versions"] = modules
 	runCode := ExitValidationFailed
 	if runErr != nil && !errors.Is(runErr, errTerraformReported) {
 		runCode = ExitError
@@ -275,7 +299,7 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 	reportedFiles := relativeFiles(ws.root, changedFiles)
 	result["changed_files"] = reportedFiles
 
-	pr := pullrequest.Build(plan, toPullRequestRuns(runs), reportedFiles)
+	pr := pullrequest.BuildWithModules(plan, toPullRequestRuns(runs), reportedFiles, modules)
 	result["pull_request"] = pr
 	if err := writePullRequestBody(opts.prBody, pr); err != nil {
 		return exitWith(ExitError, err)
@@ -284,6 +308,7 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 	if !g.jsonOut {
 		printChangedFiles(g, changedFiles)
 		printRuns(g, runs)
+		printModuleVersions(g, modules)
 	}
 
 	if runErr != nil {
@@ -295,61 +320,168 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 	return nil
 }
 
-func buildPlan(ws *workspace, statuses []*upgrade.Status, vs versionSet, requested upgrade.Level, explicit *version.Version, pin, raiseFloor, nextMajor, exactLevel, includePrerelease bool) (*upgrade.Plan, error) {
-	plan := &upgrade.Plan{}
+// checkMirrorFlags refuses mirror flags providers lock cannot use. It needs no
+// workspace, so it runs before recovery, which may rewrite files.
+func checkMirrorFlags(opts *upgradeOptions) error {
+	if opts.fsMirror != "" && opts.netMirror != "" {
+		return fmt.Errorf("--fs-mirror cannot be combined with --net-mirror; providers lock accepts a single mirror")
+	}
+	if opts.netMirror != "" {
+		if err := config.CheckNetMirror(opts.netMirror); err != nil {
+			return fmt.Errorf("--net-mirror: %w", err)
+		}
+	}
+	return nil
+}
 
+// resolveLockMirror picks the mirror for providers lock. A mirror flag replaces
+// whatever the configuration names, as --platforms does. Filesystem paths are
+// made absolute because providers lock runs inside each root module: a flag is
+// read from the working directory, a configured path from the repository root.
+// The flags themselves were already vetted by checkMirrorFlags.
+func resolveLockMirror(ws *workspace, opts *upgradeOptions) (terraform.LockMirror, error) {
+	switch {
+	case opts.fsMirror != "":
+		path, err := filepath.Abs(opts.fsMirror)
+		return terraform.LockMirror{FS: path}, err
+	case opts.netMirror != "":
+		return terraform.LockMirror{Net: opts.netMirror}, nil
+	}
+
+	mirror := terraform.LockMirror{FS: ws.cfg.Terraform.FSMirror, Net: ws.cfg.Terraform.NetMirror}
+	if mirror.FS != "" && !filepath.IsAbs(mirror.FS) {
+		mirror.FS = filepath.Join(ws.root, filepath.FromSlash(mirror.FS))
+	}
+	return mirror, nil
+}
+
+func buildPlan(ws *workspace, statuses []*upgrade.Status, vs versionSet, requested upgrade.Level, explicit *version.Version, pin, raiseFloor, nextMajor, exactLevel, includePrerelease bool) (*upgrade.Plan, error) {
+	opts := upgrade.PlanOptions{
+		Level:             requested,
+		ExactLevel:        exactLevel,
+		IncludePrerelease: includePrerelease,
+		Explicit:          explicit,
+		PinUnconstrained:  pin,
+		RaiseFloor:        raiseFloor,
+		NextMajorOnly:     nextMajor,
+	}
+
+	// Shared modules are planned before the roots that call them, so that a
+	// ceiling this run raises is judged as it will stand afterwards rather than
+	// reported as blocking the very upgrade that lifts it.
+	planned := map[*upgrade.Status]plannedStatus{}
+	rewrites := map[string]string{}
+	for _, st := range statuses {
+		mod := findModule(ws, st.Module)
+		if mod == nil || mod.IsRoot {
+			continue
+		}
+		result, err := planStatus(ws, mod, st, vs, opts)
+		if err != nil {
+			return nil, err
+		}
+		planned[st] = result
+		if result.action != nil && result.action.Constraint.Changed {
+			rewrites[localConstraintKey(mod.Dir, st.Address)] = result.action.Constraint.New
+		}
+	}
+	var deps map[string]rootDeps
+	if len(rewrites) > 0 {
+		deps = withLocalRewrites(loadDependencyConstraints(ws), rewrites)
+	}
+
+	plan := &upgrade.Plan{}
 	for _, st := range statuses {
 		mod := findModule(ws, st.Module)
 		if mod == nil {
 			continue
 		}
-
-		level := requested
-		if capped, ok := ws.cfg.MaxLevelFor(st.Address); ok {
-			if capped == "none" {
-				plan.Skipped = append(plan.Skipped, upgrade.Skip{
-					Module: st.Module, LocalName: st.LocalName, Source: st.Source, Address: st.Address,
-					Reason: "pinned by .provlift.yaml (max_level: none)",
-				})
-				continue
+		result, done := planned[st]
+		if !done {
+			if deps != nil {
+				st = buildStatus(ws, deps, vs, mod, st.Requirement, includePrerelease)
 			}
-			configured, err := upgrade.ParseLevel(capped)
-			if err != nil {
+			var err error
+			if result, err = planStatus(ws, mod, st, vs, opts); err != nil {
 				return nil, err
 			}
-			if configured < level {
-				level = configured
-			}
 		}
-		if st.Error != "" {
-			return nil, fmt.Errorf("registry lookup failed for %s in %s: %s", st.Source, st.Module, st.Error)
+		if result.action != nil {
+			plan.Actions = append(plan.Actions, *result.action)
+		} else {
+			plan.Skipped = append(plan.Skipped, result.skip)
 		}
-
-		action, reason, err := upgrade.PlanAction(mod, st, vs.Get(st.Address), upgrade.PlanOptions{
-			Level:             level,
-			ExactLevel:        exactLevel,
-			IncludePrerelease: includePrerelease,
-			Explicit:          explicit,
-			PinUnconstrained:  pin,
-			RaiseFloor:        raiseFloor,
-			NextMajorOnly:     nextMajor,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("planning %s in %s: %w; update the constraint by hand", st.Source, st.Module, err)
-		}
-		if action == nil {
-			// A child module that needs no constraint edit has nothing of its
-			// own to refresh: the roots that call it own the lock files, and
-			// they are planned from their own requirements.
-			plan.Skipped = append(plan.Skipped, upgrade.Skip{
-				Module: st.Module, LocalName: st.LocalName, Source: st.Source, Address: st.Address,
-				Reason: reason,
-			})
-			continue
-		}
-		plan.Actions = append(plan.Actions, *action)
 	}
 	return plan, nil
+}
+
+// plannedStatus is the outcome of planning one requirement: an action, or the
+// reason there is none.
+type plannedStatus struct {
+	action *upgrade.Action
+	skip   upgrade.Skip
+}
+
+func planStatus(ws *workspace, mod *model.Module, st *upgrade.Status, vs versionSet, opts upgrade.PlanOptions) (plannedStatus, error) {
+	skip := func(reason string) plannedStatus {
+		return plannedStatus{skip: upgrade.Skip{
+			Module: st.Module, LocalName: st.LocalName, Source: st.Source, Address: st.Address,
+			Reason: reason,
+		}}
+	}
+
+	explicit := opts.Explicit
+	if capped, ok := ws.cfg.MaxLevelFor(st.Address); ok {
+		if capped == "none" {
+			return skip("pinned by .provlift.yaml (max_level: none)"), nil
+		}
+		configured, err := upgrade.ParseLevel(capped)
+		if err != nil {
+			return plannedStatus{}, err
+		}
+		if configured < opts.Level {
+			opts.Level = configured
+		}
+	}
+	if explicit != nil && !containsVersion(vs.Get(st.Address), explicit) && containsPublishedVersion(vs.Published(st.Address), explicit) {
+		return plannedStatus{}, fmt.Errorf("%s is published for %s but does not support the requested platforms", explicit, st.Source)
+	}
+	if st.Error != "" {
+		return plannedStatus{}, fmt.Errorf("registry lookup failed for %s in %s: %s", st.Source, st.Module, st.Error)
+	}
+	if explicit != nil && !containsVersion(vs.Get(st.Address), explicit) {
+		return plannedStatus{}, fmt.Errorf("%s is not a published version of %s", explicit, st.Source)
+	}
+
+	action, reason, err := upgrade.PlanAction(mod, st, vs.Get(st.Address), opts)
+	if err != nil {
+		return plannedStatus{}, fmt.Errorf("planning %s in %s: %w; update the constraint by hand", st.Source, st.Module, err)
+	}
+	if action == nil {
+		// A child module that needs no constraint edit has nothing of its
+		// own to refresh: the roots that call it own the lock files, and
+		// they are planned from their own requirements.
+		return skip(reason), nil
+	}
+	return plannedStatus{action: action}, nil
+}
+
+func containsVersion(candidates []*version.Version, target *version.Version) bool {
+	for _, candidate := range candidates {
+		if candidate.Equal(target) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPublishedVersion(candidates []registry.Version, target *version.Version) bool {
+	for _, candidate := range candidates {
+		if candidate.Version.Equal(target) {
+			return true
+		}
+	}
+	return false
 }
 
 func findModule(ws *workspace, relDir string) *model.Module {
