@@ -150,6 +150,22 @@ func TestCheckAttributesLocalModuleCeilingToCallingRoots(t *testing.T) {
 	}
 }
 
+func TestCheckTextNamesLocalModuleCeiling(t *testing.T) {
+	h := newDriftHarness(t, sharedChildRepo(">= 4.0, < 4.70.0"))
+	if err := h.run(t, newCheckCommand(h.opts)); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	out := h.stdout.String()
+	// The shared module lives in this repository, so the text must not claim
+	// the cap comes from outside it.
+	if strings.Contains(out, "not by this repository") {
+		t.Errorf("a local ceiling was described as coming from outside the repository:\n%s", out)
+	}
+	if !strings.Contains(out, "by a module it depends on") || !strings.Contains(out, "imposed by:  modules/shared") {
+		t.Errorf("the ceiling and the module imposing it are not named:\n%s", out)
+	}
+}
+
 func TestCheckDoesNotRepeatLocalCeilingRecordedInLock(t *testing.T) {
 	// Terraform folds the shared module's terms into each root's lock file.
 	// Spelled differently there, they must still be reported only once.

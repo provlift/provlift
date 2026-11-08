@@ -288,13 +288,14 @@ Read-only: this command never modifies files.`,
 					}
 				}
 
-				// A ceiling inside a dependency is invisible in this repository's
-				// own files, so name what imposes it.
+				// A ceiling inside a called module is invisible in the module's
+				// own constraint, so name what imposes it. That module may be
+				// remote or a shared module in this repository.
 				for _, st := range statuses {
 					if !st.BlockedByDependency {
 						continue
 					}
-					fmt.Fprintf(g.stdout(), "\n%s in %s is capped at %s, not by this repository.\n",
+					fmt.Fprintf(g.stdout(), "\n%s in %s is capped at %s by a module it depends on.\n",
 						model.DisplaySource(st.Address), st.Module, st.LatestReachable)
 					fmt.Fprintf(g.stdout(), "  constraint:  %s\n", st.ExternalConstraint)
 
