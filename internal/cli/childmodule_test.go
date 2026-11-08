@@ -161,8 +161,50 @@ func TestCheckTextNamesLocalModuleCeiling(t *testing.T) {
 	if strings.Contains(out, "not by this repository") {
 		t.Errorf("a local ceiling was described as coming from outside the repository:\n%s", out)
 	}
-	if !strings.Contains(out, "by a module it depends on") || !strings.Contains(out, "imposed by:  modules/shared") {
+	if !strings.Contains(out, "by another module") || !strings.Contains(out, "imposed by:  modules/shared") {
 		t.Errorf("the ceiling and the module imposing it are not named:\n%s", out)
+	}
+}
+
+func TestCheckTextNamesSiblingModuleCeiling(t *testing.T) {
+	// One root calls two independent shared modules. Only modules/b has a
+	// ceiling, but the root resolves one version for both, so modules/a is
+	// capped by its sibling without depending on it.
+	root := moduleFiles("hashicorp/azurerm", "~> 4.65", "4.65.0")
+	root["shared.tf"] = `module "a" {
+  source = "../../modules/a"
+}
+
+module "b" {
+  source = "../../modules/b"
+}
+`
+	h := newDriftHarness(t, map[string]map[string]string{
+		"envs/a":    root,
+		"modules/a": moduleFiles("hashicorp/azurerm", ">= 4.0", ""),
+		"modules/b": moduleFiles("hashicorp/azurerm", ">= 4.0, < 4.70.0", ""),
+	})
+	if err := h.run(t, newCheckCommand(h.opts)); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+
+	var paragraph string
+	for _, p := range strings.Split(h.stdout.String(), "\n\n") {
+		if strings.HasPrefix(p, "hashicorp/azurerm in modules/a ") {
+			paragraph = p
+		}
+	}
+	if paragraph == "" {
+		t.Fatalf("modules/a is not reported as capped:\n%s", h.stdout.String())
+	}
+	if !strings.Contains(paragraph, "is capped at") || !strings.Contains(paragraph, "by another module.") {
+		t.Errorf("the sibling's ceiling is not described neutrally:\n%s", paragraph)
+	}
+	if strings.Contains(paragraph, "depends on") {
+		t.Errorf("modules/a is described as depending on its sibling:\n%s", paragraph)
+	}
+	if !strings.Contains(paragraph, "imposed by:  modules/b") {
+		t.Errorf("the sibling imposing the ceiling is not named:\n%s", paragraph)
 	}
 }
 

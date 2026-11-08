@@ -169,7 +169,7 @@ After `terraform get`:
 MODULE   SOURCE             CONSTRAINT            UPGRADE  BLOCKED
 .        hashicorp/azurerm  >= 4.11.0, <= 4.19.0  major    dep
 
-hashicorp/azurerm in . is capped at 4.19.0 by a module it depends on.
+hashicorp/azurerm in . is capped at 4.19.0 by another module.
   imposed by:  terraform-azurerm-regions v2.0.0
                terraform-azurerm-resource-group v3.0.0
 ```

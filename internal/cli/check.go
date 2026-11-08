@@ -288,14 +288,16 @@ Read-only: this command never modifies files.`,
 					}
 				}
 
-				// A ceiling inside a called module is invisible in the module's
+				// A ceiling from another module is invisible in this module's
 				// own constraint, so name what imposes it. That module may be
-				// remote or a shared module in this repository.
+				// remote or local, and need not be a dependency: a shared module
+				// is also capped by its siblings under the same root, because
+				// the root resolves one version for all of them.
 				for _, st := range statuses {
 					if !st.BlockedByDependency {
 						continue
 					}
-					fmt.Fprintf(g.stdout(), "\n%s in %s is capped at %s by a module it depends on.\n",
+					fmt.Fprintf(g.stdout(), "\n%s in %s is capped at %s by another module.\n",
 						model.DisplaySource(st.Address), st.Module, st.LatestReachable)
 					fmt.Fprintf(g.stdout(), "  constraint:  %s\n", st.ExternalConstraint)
 
