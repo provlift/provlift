@@ -94,6 +94,11 @@ Major upgrades require `--allow-major`. Continue with the
 [quick start](docs/quick-start/README.md) and the
 [CLI reference](docs/cli/README.md).
 
+**Try it in two minutes.** The [demo repository](https://github.com/provlift/demo)
+is a small multi-cloud Terraform and OpenTofu setup with providers deliberately
+left behind, a shared module that caps an upgrade, and drift between
+environments. It needs no cloud credentials, and provlift never runs `apply`.
+
 ## Documentation
 
 | Topic | Guide |
@@ -119,6 +124,12 @@ A searchable command overview is published at
 versions, change resources, or run `apply`.
 
 ## Contributing
+
+**Tried provlift?** Tell us how it went, including what worked, what broke and
+what is missing, in the
+[welcome discussion](https://github.com/provlift/provlift/discussions/9) or by
+[opening an issue](https://github.com/provlift/provlift/issues/new/choose).
+Reports from real repositories are the most useful feedback the project gets.
 
 Bug reports, feature requests and pull requests are welcome. Please read
 [CONTRIBUTING.md](https://github.com/provlift/provlift/blob/main/CONTRIBUTING.md)

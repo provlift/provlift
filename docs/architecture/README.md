@@ -215,9 +215,10 @@ Two consequences follow:
 
 Repository `.provlift.yaml` can select only `terraform` or `tofu` by name;
 arbitrary commands and paths are rejected. For a custom binary, the operator
-must supply `--terraform-binary` explicitly, or use `PROVLIFT_TERRAFORM_BIN`
-when the repository config leaves the default `terraform` selected. The flag
-has precedence over both the environment variable and repository config.
+must supply `--terraform-binary` explicitly, or set `PROVLIFT_TERRAFORM_BIN`.
+The precedence is **CLI flag > environment variable > repository config >
+default (`terraform`)**. This prevents a repository's `terraform.binary: tofu`
+from overriding an operator's trusted environment-selected executable.
 
 ### Other documented gaps
 

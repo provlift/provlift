@@ -81,6 +81,9 @@ an executable at a specific path, pass `--terraform-binary` or set
 `PROVLIFT_TERRAFORM_BIN`; see the
 [architecture guide](../architecture/README.md#terraform-executable-policy) for
 how these interact.
+The precedence is **CLI flag > environment variable > repository config >
+default**. In particular, `PROVLIFT_TERRAFORM_BIN` overrides both supported
+repository values (`terraform` and `tofu`) so CI can enforce its trusted binary.
 
 ### 8.3 Provider mirrors and air-gapped runners
 

@@ -59,6 +59,11 @@ macOS and Windows, lints the GitHub Actions workflows with `actionlint`, and run
 an end-to-end upgrade against the real Terraform registry. See
 [docs/development](docs/development/README.md) for details of the test strategy.
 
+When editing `.github/workflows/` or `examples/workflows/`, pin third-party
+GitHub Actions to their verified 40-character commit SHA, followed by a version
+comment (for example, `# v4.4.0`). Resolve the tag to its underlying commit rather
+than copying the SHA of an annotated tag object.
+
 Guidelines:
 
 - **Add tests.** Every behaviour change needs a test; bug fixes should include

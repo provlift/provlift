@@ -105,6 +105,42 @@ func readWorkflow(t *testing.T, name string) workflow {
 	return result
 }
 
+func TestWorkflowActionsArePinnedToCommitSHAs(t *testing.T) {
+	pinned := regexp.MustCompile(`^[\w.-]+/[\w.-]+@[0-9a-f]{40}$`)
+	version := regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+	for _, pattern := range []string{"*.yml", "../../.github/workflows/*.yml"} {
+		files, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) == 0 {
+			t.Fatalf("no workflows matched %q", pattern)
+		}
+		for _, filename := range files {
+			content, err := os.ReadFile(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, line := range strings.Split(string(content), "\n") {
+				parts := strings.SplitN(strings.TrimSpace(line), "uses:", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				action := strings.Fields(parts[1])
+				if len(action) == 0 || strings.HasPrefix(action[0], "./") || strings.HasPrefix(action[0], "docker://") {
+					continue
+				}
+				if !pinned.MatchString(action[0]) {
+					t.Errorf("%s has unpinned action %q", filename, action[0])
+				}
+				if len(action) < 3 || action[1] != "#" || !version.MatchString(action[2]) {
+					t.Errorf("%s lacks a full version comment for %q", filename, action[0])
+				}
+			}
+		}
+	}
+}
+
 func findStep(t *testing.T, document workflow, job, id string) workflowStep {
 	t.Helper()
 	for _, step := range document.Jobs[job].Steps {

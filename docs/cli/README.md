@@ -20,11 +20,14 @@ Available on every command.
 | `-C`, `--dir` | `.` | Repository directory to scan |
 | `--json` | `false` | Emit machine-readable JSON instead of a table |
 | `--exclude` | none | Glob of directories to skip (repeatable; a comma is part of the glob, as in `modules/{a,b}`) |
-| `--terraform-binary` | `terraform` | Executable to drive, for example `tofu` for OpenTofu; also `PROVLIFT_TERRAFORM_BIN` |
+| `--terraform-binary` | `terraform` | Executable to drive, for example `tofu` for OpenTofu; overrides `PROVLIFT_TERRAFORM_BIN` and repository config |
 | `--timeout` | `15m` | Timeout for a single Terraform command |
 | `--include-prerelease` | `false` | Consider prerelease provider versions |
 
 Use the command-specific sections below for complete invocations and examples.
+Executable precedence: **`--terraform-binary` > `PROVLIFT_TERRAFORM_BIN` >
+`.provlift.yaml` `terraform.binary` > default `terraform`**. The environment
+variable overrides repository selection of either `terraform` or `tofu`.
 Cobra also supplies `provlift help <command>` and `provlift completion <shell>`
 for shell autocompletion.
 

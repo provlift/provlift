@@ -96,8 +96,8 @@ func (g *globalOptions) open() (*workspace, error) {
 	}
 	if g.tfBinary != "" {
 		cfg.Terraform.Binary = g.tfBinary
-	} else if cfg.Terraform.Binary == "terraform" && os.Getenv("PROVLIFT_TERRAFORM_BIN") != "" {
-		cfg.Terraform.Binary = os.Getenv("PROVLIFT_TERRAFORM_BIN")
+	} else if envBinary := os.Getenv("PROVLIFT_TERRAFORM_BIN"); envBinary != "" {
+		cfg.Terraform.Binary = envBinary
 	}
 
 	excludes := append(append([]string{}, cfg.Exclude...), g.excludes...)
