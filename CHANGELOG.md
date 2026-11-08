@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/provlift/provlift/compare/v0.2.0...v0.3.0) (2026-11-08)
+
+
+### Features
+
+* **config:** lock linux_arm64 by default ([#80](https://github.com/provlift/provlift/issues/80)) ([4350036](https://github.com/provlift/provlift/commit/4350036eff26854b95fdfb4d567018ad5d5d4479))
+
+
+### Bug Fixes
+
+* **check:** stop calling a local module's ceiling external ([#94](https://github.com/provlift/provlift/issues/94)) ([d730c91](https://github.com/provlift/provlift/commit/d730c91280777363bf90e29e7a6b1cdc143e8510))
+* **cli:** honor trusted Terraform binary from environment ([#90](https://github.com/provlift/provlift/issues/90)) ([4490459](https://github.com/provlift/provlift/commit/449045919875e85eadab198ba7f9b96b00c1e04b))
+* **cli:** make module globs platform independent ([#63](https://github.com/provlift/provlift/issues/63)) ([aa4b769](https://github.com/provlift/provlift/commit/aa4b7694444dca18b419d49fc0bca4c4802fd00a))
+* **examples:** avoid jq reserved word $module in explicit-target skip check ([#91](https://github.com/provlift/provlift/issues/91)) ([#91](https://github.com/provlift/provlift/issues/91)) ([4627033](https://github.com/provlift/provlift/commit/46270336c89a9cbc0919d17cb915aa8b86aab1a2))
+
 ## [0.2.0](https://github.com/provlift/provlift/compare/v0.1.2...v0.2.0) (2026-11-02)
 
 
