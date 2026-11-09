@@ -372,8 +372,9 @@ go test ./internal/config ./internal/cli -run 'TestLoadRejectsBadConfig|TestOpen
 ```
 
 **Pass:** a repository-supplied executable path is refused. The flag wins over
-`PROVLIFT_TERRAFORM_BIN`, which is honored when the config selects the default
-`terraform`. To test actual subprocess execution, use a non-dry-run invocation
+`PROVLIFT_TERRAFORM_BIN`, which overrides either repository setting (`terraform`
+or `tofu`). Precedence is flag > environment > repository config > default.
+To test actual subprocess execution, use a non-dry-run invocation
 with a fake executable; `--dry-run` never constructs a Terraform runner.
 
 ---

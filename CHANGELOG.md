@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.3.0](https://github.com/provlift/provlift/compare/v0.2.0...v0.3.0) (2026-11-08)
+
+
+### Features
+
+* **config:** lock linux_arm64 by default ([#80](https://github.com/provlift/provlift/issues/80)) ([4350036](https://github.com/provlift/provlift/commit/4350036eff26854b95fdfb4d567018ad5d5d4479))
+
+
+### Bug Fixes
+
+* **check:** stop calling a local module's ceiling external ([#94](https://github.com/provlift/provlift/issues/94)) ([d730c91](https://github.com/provlift/provlift/commit/d730c91280777363bf90e29e7a6b1cdc143e8510))
+* **cli:** honor trusted Terraform binary from environment ([#90](https://github.com/provlift/provlift/issues/90)) ([4490459](https://github.com/provlift/provlift/commit/449045919875e85eadab198ba7f9b96b00c1e04b))
+* **cli:** make module globs platform independent ([#63](https://github.com/provlift/provlift/issues/63)) ([aa4b769](https://github.com/provlift/provlift/commit/aa4b7694444dca18b419d49fc0bca4c4802fd00a))
+* **examples:** avoid jq reserved word $module in explicit-target skip check ([#91](https://github.com/provlift/provlift/issues/91)) ([#91](https://github.com/provlift/provlift/issues/91)) ([4627033](https://github.com/provlift/provlift/commit/46270336c89a9cbc0919d17cb915aa8b86aab1a2))
+
+## [0.2.0](https://github.com/provlift/provlift/compare/v0.1.2...v0.2.0) (2026-11-02)
+
+
+### Features
+
+* **upgrade:** pass --fs-mirror / --net-mirror to providers lock ([#78](https://github.com/provlift/provlift/issues/78)) ([4d3cfd9](https://github.com/provlift/provlift/commit/4d3cfd9092fc7f54932f6a78b3286f5de147d85f))
+* **upgrade:** report module versions moved by init -upgrade ([#77](https://github.com/provlift/provlift/issues/77)) ([19184df](https://github.com/provlift/provlift/commit/19184dfd284cda7fdf6433e7a9a317e50cc96c75))
+
+
+### Bug Fixes
+
+* **check:** apply provider ceilings from repository-local modules to their callers ([#76](https://github.com/provlift/provlift/issues/76)) ([e23d1f5](https://github.com/provlift/provlift/commit/e23d1f5987e49102770914c85161dcf2a8b0ea48))
+* **terraform:** pass fmt file names as ./-prefixed paths ([#71](https://github.com/provlift/provlift/issues/71)) ([493d5ef](https://github.com/provlift/provlift/commit/493d5ef5c8d83a39a57482cef2917921ecc1fa7d))
+* **upgrade:** format only the edited files after an upgrade ([#68](https://github.com/provlift/provlift/issues/68)) ([db55311](https://github.com/provlift/provlift/commit/db55311dbc19c4bc3a5fc063bf9f83d26d8bb5e0)), closes [#16](https://github.com/provlift/provlift/issues/16)
+
+## [0.1.2](https://github.com/provlift/provlift/compare/v0.1.1...v0.1.2) (2026-10-31)
+
+
+### Bug Fixes
+
+* **upgrade:** reject unpublished explicit versions ([#64](https://github.com/provlift/provlift/issues/64)) ([e535322](https://github.com/provlift/provlift/commit/e535322781edc27ab27b80486384a40bb8312f9f))
+
 ## [0.1.1](https://github.com/provlift/provlift/compare/v0.1.0...v0.1.1) (2026-10-31)
 
 

@@ -20,11 +20,14 @@ Available on every command.
 | `-C`, `--dir` | `.` | Repository directory to scan |
 | `--json` | `false` | Emit machine-readable JSON instead of a table |
 | `--exclude` | none | Glob of directories to skip (repeatable; a comma is part of the glob, as in `modules/{a,b}`) |
-| `--terraform-binary` | `terraform` | Executable to drive, for example `tofu` for OpenTofu; also `PROVLIFT_TERRAFORM_BIN` |
+| `--terraform-binary` | `terraform` | Executable to drive, for example `tofu` for OpenTofu; overrides `PROVLIFT_TERRAFORM_BIN` and repository config |
 | `--timeout` | `15m` | Timeout for a single Terraform command |
 | `--include-prerelease` | `false` | Consider prerelease provider versions |
 
 Use the command-specific sections below for complete invocations and examples.
+Executable precedence: **`--terraform-binary` > `PROVLIFT_TERRAFORM_BIN` >
+`.provlift.yaml` `terraform.binary` > default `terraform`**. The environment
+variable overrides repository selection of either `terraform` or `tofu`.
 Cobra also supplies `provlift help <command>` and `provlift completion <shell>`
 for shell autocompletion.
 
@@ -110,9 +113,14 @@ Use `--exit-code` in CI to exit `2` when upgrades are available, or `1` when any
 | Flag | Default | Description |
 |---|---|---|
 | `--provider` | all | Only check these providers (repeatable) |
-| `--module` | all | Only check these module paths (repeatable, glob) |
+| `--module` | all | Only check these module paths (repeatable; slash-separated doublestar glob) |
 | `--level` | `major` | Highest level to count: `patch`, `minor` or `major` |
 | `--exit-code` | `false` | Exit `2` when upgrades are available, or `1` when a registry lookup fails, for CI gating |
+
+`--module` uses slash-separated doublestar globs on every platform. A bare path
+selects only that module; append `/**` to include descendant modules. For
+example, `envs/prod` selects only `envs/prod`, while `envs/prod/**` also selects
+`envs/prod/network`. A filter that matches no modules emits a warning on stderr.
 
 **Examples**
 
@@ -209,7 +217,7 @@ Plans and applies upgrades, then hands the lock file to Terraform (or OpenTofu).
 | Flag | Default | Description |
 |---|---|---|
 | `--provider` | all | Only upgrade these providers (repeatable) |
-| `--module` | all | Only upgrade these module paths (repeatable, glob) |
+| `--module` | all | Only upgrade these module paths (repeatable; slash-separated doublestar glob) |
 | `--level` | `patch` | Highest level to apply: `patch`, `minor` or `major` |
 | `--exact-level` | `false` | Pick the next published release at exactly the selected level; use for progressive stages |
 | `--to` | none | Upgrade to this exact version; requires a single `--provider` |
@@ -222,8 +230,14 @@ Plans and applies upgrades, then hands the lock file to Terraform (or OpenTofu).
 | `--skip-validate` | `false` | Do not run `terraform validate` afterwards |
 | `--backend` | `false` | Initialise the backend (needs state access and credentials) |
 | `--platforms` | from config | Platforms to record lock hashes for |
+| `--fs-mirror` | from config | Fetch provider packages for `providers lock` from this filesystem mirror directory |
+| `--net-mirror` | from config | Fetch provider packages for `providers lock` from this HTTPS network mirror |
 | `--fmt` | `true` | Run `terraform fmt` on modified directories |
 | `--pr-body` | none | Write a pull request description to this file (see [11.3](../ci-cd/README.md#113-raising-pull-requests-automatically)) |
+
+`--module` uses the same glob semantics described for [`check`](#61-provlift-check):
+a bare path selects only that module, and `/**` includes descendants. A filter
+that matches no modules emits a warning on stderr.
 
 **Examples**
 
@@ -248,6 +262,9 @@ provlift upgrade --level patch --module "envs/*"
 
 # Lock for Linux CI only, to avoid downloading every platform
 provlift upgrade --level patch --platforms linux_amd64
+
+# Air-gapped runner: lock from a provider mirror instead of the public registry
+provlift upgrade --level patch --fs-mirror /srv/terraform-providers
 
 # Raise a shared module's supported minimum
 provlift upgrade --provider aws --level major --exact-level --allow-major --raise-floor
@@ -343,10 +360,14 @@ Runs `terraform fmt -check` and `terraform validate` in each root module.
 
 | Flag | Default | Description |
 |---|---|---|
-| `--module` | all | Only validate these module paths (repeatable, glob) |
+| `--module` | all | Only validate these module paths (repeatable; slash-separated doublestar glob) |
 | `--plan` | `false` | Also run `terraform plan` |
 | `--backend` | `false` | Initialise the backend during validation |
 | `--no-init` | `false` | Skip init; assumes `.terraform` is already populated |
+
+`--module` uses the same glob semantics described for [`check`](#61-provlift-check):
+a bare path selects only that module, and `/**` includes descendants. A filter
+that matches no modules emits a warning on stderr.
 
 `terraform plan` is opt-in because it needs backend access, state and live
 provider credentials, and it reaches out to real infrastructure. See

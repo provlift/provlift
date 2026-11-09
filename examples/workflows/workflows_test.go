@@ -105,6 +105,42 @@ func readWorkflow(t *testing.T, name string) workflow {
 	return result
 }
 
+func TestWorkflowActionsArePinnedToCommitSHAs(t *testing.T) {
+	pinned := regexp.MustCompile(`^[\w.-]+/[\w.-]+@[0-9a-f]{40}$`)
+	version := regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+	for _, pattern := range []string{"*.yml", "../../.github/workflows/*.yml"} {
+		files, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(files) == 0 {
+			t.Fatalf("no workflows matched %q", pattern)
+		}
+		for _, filename := range files {
+			content, err := os.ReadFile(filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, line := range strings.Split(string(content), "\n") {
+				parts := strings.SplitN(strings.TrimSpace(line), "uses:", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				action := strings.Fields(parts[1])
+				if len(action) == 0 || strings.HasPrefix(action[0], "./") || strings.HasPrefix(action[0], "docker://") {
+					continue
+				}
+				if !pinned.MatchString(action[0]) {
+					t.Errorf("%s has unpinned action %q", filename, action[0])
+				}
+				if len(action) < 3 || action[1] != "#" || !version.MatchString(action[2]) {
+					t.Errorf("%s lacks a full version comment for %q", filename, action[0])
+				}
+			}
+		}
+	}
+}
+
 func findStep(t *testing.T, document workflow, job, id string) workflowStep {
 	t.Helper()
 	for _, step := range document.Jobs[job].Steps {
@@ -165,15 +201,14 @@ func newBashHarness(t *testing.T) *scriptHarness {
 	}
 }
 
-func (h *scriptHarness) run(t *testing.T, script string, values map[string]string) (string, error) {
+// run executes the literal workflow script. GitHub expressions are never
+// substituted into shell text; values reach scripts solely through step env.
+func (h *scriptHarness) run(t *testing.T, step workflowStep, values map[string]string) (string, error) {
 	t.Helper()
-	for expression, value := range values {
-		script = strings.ReplaceAll(script, "${{ "+expression+" }}", value)
+	if strings.Contains(step.Run, "${{") {
+		t.Fatal("workflow embeds a GitHub expression in shell source")
 	}
-	if strings.Contains(script, "${{") {
-		t.Fatal("test did not supply all workflow expression values")
-	}
-	script = "bin=\"$PROVLIFT_WORKFLOW_BIN\"\nif command -v cygpath >/dev/null; then bin=$(cygpath -u \"$bin\"); fi\nexport PATH=\"$bin:$PATH\"\n" + script
+	script := "bin=\"$PROVLIFT_WORKFLOW_BIN\"\nif command -v cygpath >/dev/null; then bin=$(cygpath -u \"$bin\"); fi\nexport PATH=\"$bin:$PATH\"\n" + step.Run
 	path := filepath.Join(h.dir, "step.sh")
 	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
@@ -186,6 +221,27 @@ func (h *scriptHarness) run(t *testing.T, script string, values map[string]strin
 		"PROVLIFT_WORKFLOW_CALLS="+h.calls, "PROVLIFT_WORKFLOW_RESPONSES="+h.responses,
 		"RUNNER_TEMP="+filepath.ToSlash(h.dir), "GITHUB_OUTPUT="+filepath.ToSlash(h.output),
 		"GITHUB_ENV="+filepath.ToSlash(filepath.Join(h.dir, "github-env")))
+	for name, expression := range step.Env {
+		value, supplied := values[name]
+		if !supplied {
+			switch {
+			case inputWithFallback.MatchString(expression):
+				value = inputWithFallback.FindStringSubmatch(expression)[1]
+			case bareInput.MatchString(expression):
+				value = ""
+			case strings.Contains(expression, "${{"):
+				t.Fatalf("no test value for workflow environment expression %q", expression)
+			default:
+				value = expression
+			}
+		}
+		command.Env = append(command.Env, name+"="+value)
+	}
+	for name := range values {
+		if _, ok := step.Env[name]; !ok {
+			t.Fatalf("workflow step does not define environment variable %q", name)
+		}
+	}
 	command.Env = append(command.Env, h.environment...)
 	output, err := command.CombinedOutput()
 	return string(output), err
@@ -211,11 +267,81 @@ func (h *scriptHarness) invocations(t *testing.T) [][]string {
 	return calls
 }
 
+func TestExampleRunScriptsNeverInlineGitHubExpressions(t *testing.T) {
+	for _, filename := range []string{"provider-upgrades.yml", "provider-compatibility.yml"} {
+		document := readWorkflow(t, filename)
+		for jobName, job := range document.Jobs {
+			for _, step := range job.Steps {
+				if strings.Contains(step.Run, "${{") {
+					t.Errorf("%s job %s step %q injects an expression into shell source", filename, jobName, step.Name)
+				}
+			}
+		}
+	}
+	upgrades := readWorkflow(t, "provider-upgrades.yml")
+	for name, want := range map[string]string{
+		"REQUESTED_LEVEL": "${{ inputs.level || 'auto' }}",
+		"ALLOW_MAJOR":     "${{ inputs.allow_major || 'false' }}",
+	} {
+		if got := findStep(t, upgrades, "discover", "plan").Env[name]; got != want {
+			t.Errorf("discovery env %s=%q, want %q", name, got, want)
+		}
+	}
+	for name, want := range map[string]string{
+		"MATRIX_PROVIDER": "${{ matrix.provider }}",
+		"MATRIX_LEVEL":    "${{ matrix.level }}",
+		"ALLOW_MAJOR":     "${{ inputs.allow_major || 'false' }}",
+	} {
+		if got := findStep(t, upgrades, "upgrade", "upgrade").Env[name]; got != want {
+			t.Errorf("upgrade env %s=%q, want %q", name, got, want)
+		}
+	}
+	compatibility := readWorkflow(t, "provider-compatibility.yml")
+	for name, want := range map[string]string{
+		"REQUESTED_LEVEL": "${{ inputs.level || 'minor' }}",
+		"ALLOW_MAJOR":     "${{ inputs.allow_major || 'false' }}",
+		"RAISE_FLOOR":     "${{ inputs.raise_floor || 'false' }}",
+	} {
+		if got := findStep(t, compatibility, "compatibility", "attempt").Env[name]; got != want {
+			t.Errorf("compatibility env %s=%q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestMatrixProviderCannotInjectShellCommands(t *testing.T) {
+	step := findStep(t, readWorkflow(t, "provider-upgrades.yml"), "upgrade", "upgrade")
+	harness := newScriptHarness(t)
+	// A shell metacharacter payload must remain one literal --provider argument.
+	payload := "hashicorp/null\"; touch \"$RUNNER_TEMP/injected\"; #"
+	output, err := harness.run(t, step, map[string]string{
+		"MATRIX_PROVIDER": payload, "MATRIX_LEVEL": "minor", "ALLOW_MAJOR": "false",
+	})
+	if err != nil {
+		t.Fatalf("upgrade worker rejected literal provider argument: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(harness.dir, "injected")); !os.IsNotExist(err) {
+		t.Fatalf("shell payload was executed, stat err=%v", err)
+	}
+	calls := harness.invocations(t)
+	if len(calls) != 1 {
+		t.Fatalf("expected one worker call, got %v", calls)
+	}
+	for i, argument := range calls[0] {
+		if argument == "--provider" && i+1 < len(calls[0]) {
+			if calls[0][i+1] != payload {
+				t.Fatalf("provider argument was not passed literally: %v", calls[0])
+			}
+			return
+		}
+	}
+	t.Fatalf("missing provider argument in %v", calls[0])
+}
+
 func TestUpgradeWorkerRefusesUnacknowledgedMajor(t *testing.T) {
 	step := findStep(t, readWorkflow(t, "provider-upgrades.yml"), "upgrade", "upgrade")
 	harness := newScriptHarness(t)
-	output, err := harness.run(t, step.Run, map[string]string{
-		"matrix.provider": "hashicorp/null", "matrix.level": "major", "inputs.allow_major || 'false'": "false",
+	output, err := harness.run(t, step, map[string]string{
+		"MATRIX_PROVIDER": "hashicorp/null", "MATRIX_LEVEL": "major", "ALLOW_MAJOR": "false",
 	})
 	if err == nil || len(harness.invocations(t)) != 0 || !strings.Contains(output, "requires allow_major") {
 		t.Fatalf("worker must refuse a major without acknowledgement before invoking provlift: err=%v\n%s", err, output)
@@ -254,8 +380,8 @@ func TestDiscoveryMatrixAndScheduledSafety(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			harness := newScriptHarness(t)
 			harness.responses = scenario.responses
-			output, err := harness.run(t, step.Run, map[string]string{
-				"inputs.level || 'auto'": "auto", "inputs.allow_major || 'false'": scenario.acknowledged,
+			output, err := harness.run(t, step, map[string]string{
+				"REQUESTED_LEVEL": "auto", "ALLOW_MAJOR": scenario.acknowledged,
 			})
 			if err != nil {
 				t.Fatalf("discovery script failed: %v\n%s", err, output)
@@ -325,8 +451,8 @@ func TestWorkerRerunUsesSamePullRequestBranch(t *testing.T) {
 	}
 	harness := newScriptHarness(t)
 	for attempt := 0; attempt < 2; attempt++ {
-		output, err := harness.run(t, step.Run, map[string]string{
-			"matrix.provider": "hashicorp/null", "matrix.level": "minor", "inputs.allow_major || 'false'": "false",
+		output, err := harness.run(t, step, map[string]string{
+			"MATRIX_PROVIDER": "hashicorp/null", "MATRIX_LEVEL": "minor", "ALLOW_MAJOR": "false",
 		})
 		if err != nil {
 			t.Fatalf("worker run %d failed: %v\n%s", attempt, err, output)
@@ -347,8 +473,8 @@ func TestWorkerRerunUsesSamePullRequestBranch(t *testing.T) {
 func TestAcknowledgedMajorWorkerPassesExplicitAuthorization(t *testing.T) {
 	step := findStep(t, readWorkflow(t, "provider-upgrades.yml"), "upgrade", "upgrade")
 	harness := newScriptHarness(t)
-	output, err := harness.run(t, step.Run, map[string]string{
-		"matrix.provider": "hashicorp/null", "matrix.level": "major", "inputs.allow_major || 'false'": "true",
+	output, err := harness.run(t, step, map[string]string{
+		"MATRIX_PROVIDER": "hashicorp/null", "MATRIX_LEVEL": "major", "ALLOW_MAJOR": "true",
 	})
 	if err != nil {
 		t.Fatalf("acknowledged major refused: %v\n%s", err, output)
@@ -390,7 +516,7 @@ func TestCompatibilityVendorsBeforeChecking(t *testing.T) {
 		t.Fatal(err)
 	}
 	harness.environment = []string{"MODULES=.,example,examples/*,does-not-exist", "PROVLIFT_TERRAFORM_CALLS=" + filepath.ToSlash(terraformLog)}
-	output, err := harness.run(t, steps[vendorIndex].Run, nil)
+	output, err := harness.run(t, steps[vendorIndex], nil)
 	if err != nil {
 		t.Fatalf("vendoring step failed: %v\n%s", err, output)
 	}
@@ -419,9 +545,9 @@ func TestCompatibilityRequiresMajorAcknowledgement(t *testing.T) {
 	harness := newScriptHarness(t)
 	harness.environment = []string{"MODULES=.", "PROVIDER_SOURCE=" + testProviderSource}
 	harness.responses = `{"major":{"plan":{"actions":[]},"changed_files":[],"terraform_runs":[],"pull_request":{"branch":"provlift/no-changes","title":"No changes","labels":[]}}}`
-	output, err := harness.run(t, step.Run, map[string]string{
-		"inputs.level || 'minor'": "major", "inputs.raise_floor || 'false'": "false",
-		"inputs.allow_major || 'false'": "false", "inputs.target_version || ''": "",
+	output, err := harness.run(t, step, map[string]string{
+		"REQUESTED_LEVEL": "major", "RAISE_FLOOR": "false",
+		"ALLOW_MAJOR": "false", "PROVLIFT_TARGET_VERSION": "",
 	})
 	if err == nil || len(harness.invocations(t)) != 0 || !strings.Contains(output, "requires allow_major") {
 		t.Fatalf("compatibility major must require acknowledgement before invoking provlift: err=%v\n%s", err, output)
@@ -436,9 +562,9 @@ func TestCompatibilityDoesNotRequestPRForLockOnlyChanges(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(harness.dir, "check.json"), []byte(`{"providers":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := harness.run(t, step.Run, map[string]string{
-		"inputs.level || 'minor'": "minor", "inputs.raise_floor || 'false'": "false",
-		"inputs.allow_major || 'false'": "false", "inputs.target_version || ''": "",
+	output, err := harness.run(t, step, map[string]string{
+		"REQUESTED_LEVEL": "minor", "RAISE_FLOOR": "false",
+		"ALLOW_MAJOR": "false", "PROVLIFT_TARGET_VERSION": "",
 	})
 	if err != nil {
 		t.Fatalf("compatibility step failed: %v\n%s", err, output)
@@ -522,9 +648,9 @@ func TestCompatibilityPassesExplicitTargetWithoutNextMajor(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(harness.dir, "pr-body.md"), []byte("Provider floor update"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := harness.run(t, step.Run, map[string]string{
-		"inputs.level || 'minor'":       "major",
-		"inputs.allow_major || 'false'": "true", "inputs.raise_floor || 'false'": "false",
+	output, err := harness.run(t, step, map[string]string{
+		"REQUESTED_LEVEL": "major",
+		"ALLOW_MAJOR":     "true", "RAISE_FLOOR": "false",
 	})
 	if err != nil {
 		t.Fatalf("explicit compatibility target failed: %v\n%s\ninvocations: %v", err, output, harness.invocations(t))
@@ -567,9 +693,9 @@ func TestCompatibilityValidatesExactTargetWhenPlanIsNoOp(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(harness.dir, "check.json"), []byte(`{"providers":[]}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			output, err := harness.run(t, step.Run, map[string]string{
-				"inputs.level || 'minor'": "major", "inputs.allow_major || 'false'": "true",
-				"inputs.raise_floor || 'false'": "false",
+			output, err := harness.run(t, step, map[string]string{
+				"REQUESTED_LEVEL": "major", "ALLOW_MAJOR": "true",
+				"RAISE_FLOOR": "false",
 			})
 			if lockVersion == "5.6.0" {
 				if err != nil {
@@ -619,9 +745,9 @@ func TestCompatibilityValidatesTargetOlderThanLock(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(harness.dir, "check.json"), []byte(`{"providers":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := harness.run(t, step.Run, map[string]string{
-		"inputs.level || 'minor'": "major", "inputs.allow_major || 'false'": "true",
-		"inputs.raise_floor || 'false'": "false",
+	output, err := harness.run(t, step, map[string]string{
+		"REQUESTED_LEVEL": "major", "ALLOW_MAJOR": "true",
+		"RAISE_FLOOR": "false",
 	})
 	if err != nil {
 		t.Fatalf("baseline below the lock must reach exact-target validation: %v\n%s", err, output)
@@ -645,9 +771,9 @@ func TestCompatibilityRejectsExplicitTargetSkippedByLevel(t *testing.T) {
 		"PROVLIFT_WORKFLOW_TERRAFORM_CALLS=" + filepath.ToSlash(terraformLog),
 	}
 	harness.responses = `{"minor":{"plan":{"actions":null,"skipped":[{"module":".","reason":"5.6.0 is a major upgrade but --level is minor"}]},"changed_files":[],"terraform_runs":[],"pull_request":{"branch":"provlift/no-changes","title":"No changes","labels":[]}}}`
-	output, err := harness.run(t, step.Run, map[string]string{
-		"inputs.level || 'minor'": "minor", "inputs.target_version || ''": "5.6.0",
-		"inputs.allow_major || 'false'": "false", "inputs.raise_floor || 'false'": "false",
+	output, err := harness.run(t, step, map[string]string{
+		"REQUESTED_LEVEL": "minor", "PROVLIFT_TARGET_VERSION": "5.6.0",
+		"ALLOW_MAJOR": "false", "RAISE_FLOOR": "false",
 	})
 	if err == nil || !strings.Contains(output, "skipped by the requested level or provider policy") {
 		t.Fatalf("major target skipped by a minor level must fail: err=%v\n%s", err, output)
@@ -680,9 +806,9 @@ func TestCompatibilityExactTargetPreservesExistingOverride(t *testing.T) {
 		"PROVLIFT_WORKFLOW_LIST_RESPONSE={\"providers\":[{\"module\":\".\",\"is_root\":true,\"source\":\"registry.terraform.io/hashicorp/aws\",\"locked\":\"4.57.0\"}],\"diagnostics\":[]}",
 	}
 	harness.responses = `{"major":{"plan":{"actions":null,"skipped":[{"module":".","reason":"5.6.0 is not newer than the current version 5.6.0"}]},"changed_files":[],"terraform_runs":[],"pull_request":{"branch":"provlift/no-changes","title":"No changes","labels":[]}}}`
-	output, err := harness.run(t, step.Run, map[string]string{
-		"inputs.level || 'minor'": "major", "inputs.allow_major || 'false'": "true",
-		"inputs.raise_floor || 'false'": "false",
+	output, err := harness.run(t, step, map[string]string{
+		"REQUESTED_LEVEL": "major", "ALLOW_MAJOR": "true",
+		"RAISE_FLOOR": "false",
 	})
 	if err == nil || !strings.Contains(output, "temporary compatibility override already exists") {
 		t.Fatalf("existing override must stop fallback validation: err=%v\n%s", err, output)
@@ -702,8 +828,8 @@ func TestDirectDiscoveryStages(t *testing.T) {
 			if level == "major" {
 				acknowledged = "true"
 			}
-			output, err := harness.run(t, step.Run, map[string]string{
-				"inputs.level || 'auto'": level, "inputs.allow_major || 'false'": acknowledged,
+			output, err := harness.run(t, step, map[string]string{
+				"REQUESTED_LEVEL": level, "ALLOW_MAJOR": acknowledged,
 			})
 			if err != nil {
 				t.Fatalf("direct discovery failed: %v\n%s", err, output)
@@ -734,8 +860,8 @@ func TestUpgradeWorkerPullRequestChangeGate(t *testing.T) {
 			response = `{"plan":{"actions":[{"source":"hashicorp/null"}]},"changed_files":[".terraform.lock.hcl"],"pull_request":{"branch":"provlift/null-1.0.1","title":"Upgrade fixture","labels":["dependencies"]}}`
 		}
 		harness.responses = `{"minor":` + response + `}`
-		output, err := harness.run(t, step.Run, map[string]string{
-			"matrix.provider": "hashicorp/null", "matrix.level": "minor", "inputs.allow_major || 'false'": "false",
+		output, err := harness.run(t, step, map[string]string{
+			"MATRIX_PROVIDER": "hashicorp/null", "MATRIX_LEVEL": "minor", "ALLOW_MAJOR": "false",
 		})
 		if err != nil {
 			t.Fatalf("worker failed: %v\n%s", err, output)
@@ -774,9 +900,9 @@ func TestCompatibilityConstraintChangeAndValidationGates(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(harness.dir, "pr-body.md"), []byte("Changes and validation"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			output, err := harness.run(t, step.Run, map[string]string{
-				"inputs.level || 'minor'": scenario.level, "inputs.raise_floor || 'false'": "false",
-				"inputs.allow_major || 'false'": "true", "inputs.target_version || ''": "",
+			output, err := harness.run(t, step, map[string]string{
+				"REQUESTED_LEVEL": scenario.level, "RAISE_FLOOR": "false",
+				"ALLOW_MAJOR": "true", "PROVLIFT_TARGET_VERSION": "",
 			})
 			if scenario.valid {
 				if err != nil {
@@ -824,13 +950,6 @@ var (
 	bareInput         = regexp.MustCompile(`\$\{\{\s*inputs\.[A-Za-z_]+\s*\}\}`)
 )
 
-// asScheduled resolves input expressions the way GitHub does for a scheduled
-// run, where the inputs context is empty and every fallback applies.
-func asScheduled(script string) string {
-	script = inputWithFallback.ReplaceAllString(script, "$1")
-	return bareInput.ReplaceAllString(script, "")
-}
-
 func TestCompatibilityResolvesProvider(t *testing.T) {
 	document := readWorkflow(t, "provider-compatibility.yml")
 	if document.Env["PROVIDER"] != "${{ inputs.provider || vars.PROVLIFT_PROVIDER }}" {
@@ -874,7 +993,7 @@ func TestCompatibilityResolvesProvider(t *testing.T) {
 				t.Fatal(err)
 			}
 			harness.environment = []string{"PROVIDER=" + scenario.provider}
-			output, err := harness.run(t, step.Run, nil)
+			output, err := harness.run(t, step, nil)
 			environment, _ := os.ReadFile(filepath.Join(harness.dir, "github-env"))
 			if scenario.wantError != "" {
 				if err == nil || !strings.Contains(output, scenario.wantError) || len(environment) != 0 {
@@ -937,7 +1056,7 @@ func TestInstallStepRequiresReleaseTag(t *testing.T) {
 						t.Fatal(err)
 					}
 					harness.environment = []string{"PROVLIFT_VERSION=" + scenario.version, "PROVLIFT_GO_CALLS=" + filepath.ToSlash(goLog)}
-					output, err := harness.run(t, step.Run, nil)
+					output, err := harness.run(t, step, nil)
 					calls, _ := os.ReadFile(goLog)
 					if scenario.allowed {
 						want := "install github.com/provlift/provlift/cmd/provlift@" + scenario.version
@@ -965,8 +1084,8 @@ func TestUpgradeWorkerScopesToItsMatrixProvider(t *testing.T) {
 	step := findStep(t, document, "upgrade", "upgrade")
 	const provider = "registry.terraform.io/integrations/github"
 	harness := newScriptHarness(t)
-	output, err := harness.run(t, step.Run, map[string]string{
-		"matrix.provider": provider, "matrix.level": "minor", "inputs.allow_major || 'false'": "false",
+	output, err := harness.run(t, step, map[string]string{
+		"MATRIX_PROVIDER": provider, "MATRIX_LEVEL": "minor", "ALLOW_MAJOR": "false",
 	})
 	if err != nil {
 		t.Fatalf("worker failed: %v\n%s", err, output)
@@ -1026,7 +1145,7 @@ func TestScheduledRunsNeverAuthorizeMajor(t *testing.T) {
 	t.Run("discovery", func(t *testing.T) {
 		harness := newScriptHarness(t)
 		harness.responses = majorOnly
-		script := asScheduled(findStep(t, upgrades, "discover", "plan").Run)
+		script := findStep(t, upgrades, "discover", "plan")
 		output, err := harness.run(t, script, nil)
 		if err != nil {
 			t.Fatalf("scheduled discovery failed: %v\n%s", err, output)
@@ -1044,8 +1163,8 @@ func TestScheduledRunsNeverAuthorizeMajor(t *testing.T) {
 
 	t.Run("worker", func(t *testing.T) {
 		harness := newScriptHarness(t)
-		script := asScheduled(findStep(t, upgrades, "upgrade", "upgrade").Run)
-		output, err := harness.run(t, script, map[string]string{"matrix.provider": "hashicorp/google", "matrix.level": "major"})
+		script := findStep(t, upgrades, "upgrade", "upgrade")
+		output, err := harness.run(t, script, map[string]string{"MATRIX_PROVIDER": "hashicorp/google", "MATRIX_LEVEL": "major"})
 		if err == nil || len(harness.invocations(t)) != 0 {
 			t.Fatalf("a scheduled worker handed a major must refuse it: err=%v\n%s", err, output)
 		}
@@ -1059,7 +1178,7 @@ func TestScheduledRunsNeverAuthorizeMajor(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(harness.dir, "check.json"), []byte(`{"providers":[]}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		script := asScheduled(findStep(t, readWorkflow(t, "provider-compatibility.yml"), "compatibility", "attempt").Run)
+		script := findStep(t, readWorkflow(t, "provider-compatibility.yml"), "compatibility", "attempt")
 		output, err := harness.run(t, script, nil)
 		if err != nil {
 			t.Fatalf("scheduled compatibility failed: %v\n%s", err, output)

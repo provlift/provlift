@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,9 +34,25 @@ type Config struct {
 	// Terraform selects the binary to drive, allowing OpenTofu via "tofu".
 	Terraform struct {
 		Binary string `yaml:"binary"`
+
+		// FSMirror and NetMirror direct `providers lock` to a provider mirror,
+		// for runners that cannot reach the public registries. At most one may
+		// be set. A relative FSMirror is read from the repository root.
+		FSMirror  string `yaml:"fs_mirror"`
+		NetMirror string `yaml:"net_mirror"`
 	} `yaml:"terraform"`
 
 	Providers ProviderRules `yaml:"providers"`
+
+	explicitBinary string
+}
+
+// ExplicitBinary returns the binary configured in .provlift.yaml, or "" if not explicitly set.
+func (c *Config) ExplicitBinary() string {
+	if c == nil {
+		return ""
+	}
+	return c.explicitBinary
 }
 
 // ProviderRules holds per-provider policy.
@@ -49,10 +66,15 @@ type ProviderRules struct {
 	MaxLevel map[string]string `yaml:"max_level"`
 }
 
-// DefaultPlatforms covers the machines this team builds and runs on.
+// DefaultPlatforms covers the machines Terraform commonly runs on: Windows and
+// Linux workstations, Intel and Apple Silicon Macs, and x86 and ARM Linux CI
+// runners and servers such as AWS Graviton. A platform missing here gets its
+// hash added by the first init that runs on it, which is the lock-file churn
+// locking every platform up front avoids.
 var DefaultPlatforms = []string{
 	"windows_amd64",
 	"linux_amd64",
+	"linux_arm64",
 	"darwin_amd64",
 	"darwin_arm64",
 }
@@ -76,7 +98,7 @@ func Load(root string) (*Config, error) {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	cfg := Default()
+	cfg := &Config{Platforms: append([]string(nil), DefaultPlatforms...)}
 	// KnownFields rejects typos rather than silently ignoring a misspelled key
 	// that would otherwise disable a safety rule.
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
@@ -94,6 +116,7 @@ func Load(root string) (*Config, error) {
 	if len(cfg.Platforms) == 0 {
 		cfg.Platforms = append([]string(nil), DefaultPlatforms...)
 	}
+	cfg.explicitBinary = cfg.Terraform.Binary
 	if cfg.Terraform.Binary == "" {
 		cfg.Terraform.Binary = "terraform"
 	}
@@ -106,6 +129,14 @@ func Load(root string) (*Config, error) {
 func (c *Config) validate() error {
 	if c.Terraform.Binary != "terraform" && c.Terraform.Binary != "tofu" {
 		return fmt.Errorf("terraform.binary must be terraform or tofu; use --terraform-binary for an explicit executable")
+	}
+	if c.Terraform.FSMirror != "" && c.Terraform.NetMirror != "" {
+		return fmt.Errorf("terraform.fs_mirror and terraform.net_mirror cannot both be set; providers lock accepts a single mirror")
+	}
+	if c.Terraform.NetMirror != "" {
+		if err := CheckNetMirror(c.Terraform.NetMirror); err != nil {
+			return fmt.Errorf("terraform.net_mirror: %w", err)
+		}
 	}
 	for _, selector := range c.Providers.Ignore {
 		if _, err := model.ParseAddress(selector); err != nil {
@@ -126,6 +157,19 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("providers.max_level[%q] is %q; want patch, minor, major or none", selector, level)
 		}
+	}
+	return nil
+}
+
+// CheckNetMirror reports whether u can serve the provider network mirror
+// protocol, which Terraform and OpenTofu only speak over HTTPS.
+func CheckNetMirror(u string) error {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return fmt.Errorf("%q is not a valid URL: %w", u, err)
+	}
+	if parsed.Scheme != "https" || parsed.Host == "" {
+		return fmt.Errorf("%q must be an https:// URL", u)
 	}
 	return nil
 }

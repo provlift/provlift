@@ -35,6 +35,15 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	}
 }
 
+func TestDefaultPlatformsCoverCommonMachines(t *testing.T) {
+	// A platform missing from the default gets its hash added by the first
+	// init on it, so ARM Linux runners (Graviton, ARM CI) must be included.
+	want := "windows_amd64,linux_amd64,linux_arm64,darwin_amd64,darwin_arm64"
+	if got := strings.Join(DefaultPlatforms, ","); got != want {
+		t.Errorf("DefaultPlatforms = %s, want %s", got, want)
+	}
+}
+
 func TestLoadValidConfig(t *testing.T) {
 	dir := writeConfig(t, `
 exclude:
@@ -156,6 +165,16 @@ func TestLoadRejectsBadConfig(t *testing.T) {
 			name:        "repository cannot nominate an arbitrary command",
 			content:     "terraform:\n  binary: attacker\n",
 			wantMessage: "terraform.binary",
+		},
+		{
+			name:        "providers lock accepts a single mirror",
+			content:     "terraform:\n  fs_mirror: /mirror\n  net_mirror: https://mirror.example.com/providers/\n",
+			wantMessage: "cannot both be set",
+		},
+		{
+			name:        "network mirrors are served over HTTPS",
+			content:     "terraform:\n  net_mirror: http://mirror.example.com/providers/\n",
+			wantMessage: "https://",
 		},
 	}
 

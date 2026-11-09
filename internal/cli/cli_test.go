@@ -383,16 +383,36 @@ func TestCheckWarnsOnCrossNamespaceProviderSelector(t *testing.T) {
 }
 
 func TestOpenUsesEnvironmentBinaryUnlessFlagOverrides(t *testing.T) {
-	t.Setenv("PROVLIFT_TERRAFORM_BIN", "custom-terraform")
-	h := newHarness(t, nil)
-	ws, err := h.opts.open()
-	if err != nil || ws.cfg.Terraform.Binary != "custom-terraform" {
-		t.Fatalf("environment binary = %q, error = %v", ws.cfg.Terraform.Binary, err)
-	}
-	h.opts.tfBinary = "explicit-terraform"
-	ws, err = h.opts.open()
-	if err != nil || ws.cfg.Terraform.Binary != "explicit-terraform" {
-		t.Fatalf("flag binary = %q, error = %v", ws.cfg.Terraform.Binary, err)
+	for _, tc := range []struct {
+		name, config, environment, flag, want, wantStderr string
+	}{
+		{"default", "", "", "", "terraform", ""},
+		{"repository", "tofu", "", "", "tofu", ""},
+		{"environment over default", "", "custom-terraform", "", "custom-terraform", ""},
+		{"environment over repository", "tofu", "custom-terraform", "", "custom-terraform", "warning: PROVLIFT_TERRAFORM_BIN=custom-terraform overrides terraform.binary: tofu from .provlift.yaml\n"},
+		{"environment matches repository", "tofu", "tofu", "", "tofu", ""},
+		{"flag over environment", "", "custom-terraform", "explicit-terraform", "explicit-terraform", ""},
+		{"flag over both", "tofu", "custom-terraform", "explicit-terraform", "explicit-terraform", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PROVLIFT_TERRAFORM_BIN", tc.environment)
+			var extra map[string]string
+			if tc.config != "" {
+				extra = map[string]string{".provlift.yaml": "terraform:\n  binary: " + tc.config + "\n"}
+			}
+			h := newHarness(t, extra)
+			h.opts.tfBinary = tc.flag
+			ws, err := h.opts.open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ws.cfg.Terraform.Binary != tc.want {
+				t.Fatalf("binary = %q, want %q", ws.cfg.Terraform.Binary, tc.want)
+			}
+			if gotStderr := h.stderr.String(); gotStderr != tc.wantStderr {
+				t.Fatalf("stderr = %q, want %q", gotStderr, tc.wantStderr)
+			}
+		})
 	}
 }
 
@@ -791,12 +811,12 @@ func TestUpgradeJSONParsingErrors(t *testing.T) {
 			if err := json.Unmarshal(output.Bytes(), &response); err != nil {
 				t.Fatalf("argument error omitted JSON response: %v\n%s", err, output.String())
 			}
-			for _, key := range []string{"dry_run", "plan", "changed_files", "terraform_runs", "pull_request"} {
+			for _, key := range []string{"dry_run", "plan", "changed_files", "terraform_runs", "module_versions", "pull_request"} {
 				if _, exists := response[key]; !exists {
 					t.Errorf("argument error omitted %s", key)
 				}
 			}
-			if len(response) != 5 {
+			if len(response) != 6 {
 				t.Fatalf("unexpected response keys: %s", output.String())
 			}
 		})
@@ -861,7 +881,7 @@ func TestUpgradeJSONOutcomeContract(t *testing.T) {
 			if err := json.Unmarshal(h.stdout.Bytes(), &result); err != nil {
 				t.Fatalf("invalid JSON response: %v\n%s", err, h.stdout.String())
 			}
-			keys := []string{"dry_run", "plan", "changed_files", "terraform_runs", "pull_request"}
+			keys := []string{"dry_run", "plan", "changed_files", "terraform_runs", "module_versions", "pull_request"}
 			if len(result) != len(keys) {
 				t.Errorf("response has %d keys, want %d", len(result), len(keys))
 			}
@@ -1058,7 +1078,7 @@ func TestUpgradeRegistryFailureReturnsError(t *testing.T) {
 		t.Fatal("failed registry lookup modified the configuration")
 	}
 	var result map[string]json.RawMessage
-	if err := json.Unmarshal(h.stdout.Bytes(), &result); err != nil || len(result) != 5 {
+	if err := json.Unmarshal(h.stdout.Bytes(), &result); err != nil || len(result) != 6 {
 		t.Fatalf("registry error did not emit the JSON envelope: %s (%v)", h.stdout.String(), err)
 	}
 }

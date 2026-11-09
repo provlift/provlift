@@ -30,7 +30,7 @@ permissions:
   pull-requests: write
 
 env:
-  PROVLIFT_VERSION: ${{ vars.PROVLIFT_VERSION || 'v0.1.1' }} # x-release-please-version
+  PROVLIFT_VERSION: ${{ vars.PROVLIFT_VERSION || 'v0.3.0' }} # x-release-please-version
   GO_VERSION: "1.26"
 
 jobs:
@@ -41,9 +41,9 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       found: ${{ steps.plan.outputs.found }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -61,10 +61,13 @@ jobs:
 
       - id: plan
         name: Build the upgrade matrix
+        env:
+          REQUESTED_LEVEL: ${{ inputs.level || 'auto' }}
+          ALLOW_MAJOR: ${{ inputs.allow_major || 'false' }}
         run: |
           set -euo pipefail
-          requested="${{ inputs.level || 'auto' }}"
-          allow_major="${{ inputs.allow_major || 'false' }}"
+          requested="$REQUESTED_LEVEL"
+          allow_major="$ALLOW_MAJOR"
 
           if [ "$requested" = "major" ] && [ "$allow_major" != "true" ]; then
             echo "::error::level=major also requires allow_major, which records that breaking changes are expected."
@@ -129,13 +132,13 @@ jobs:
       max-parallel: 3
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
         with:
           # The wrapper intercepts stdout, which provlift parses.
           terraform_wrapper: false
@@ -152,24 +155,28 @@ jobs:
 
       - id: upgrade
         name: Upgrade ${{ matrix.provider }}
+        env:
+          MATRIX_PROVIDER: ${{ matrix.provider }}
+          MATRIX_LEVEL: ${{ matrix.level }}
+          ALLOW_MAJOR: ${{ inputs.allow_major || 'false' }}
         run: |
           set -euo pipefail
 
           args=(
-            --provider "${{ matrix.provider }}"
-            --level "${{ matrix.level }}"
+            --provider "$MATRIX_PROVIDER"
+            --level "$MATRIX_LEVEL"
             --exact-level
             --pr-body "$RUNNER_TEMP/pr-body.md"
             --json
           )
-          if [ "${{ matrix.level }}" = "major" ] && [ "${{ inputs.allow_major || 'false' }}" != "true" ]; then
+          if [ "$MATRIX_LEVEL" = "major" ] && [ "$ALLOW_MAJOR" != "true" ]; then
             echo "::error::level=major requires allow_major before applying an upgrade."
             exit 1
           fi
-          if [ "${{ inputs.allow_major || 'false' }}" = "true" ]; then
+          if [ "$ALLOW_MAJOR" = "true" ]; then
             args+=(--allow-major)
           fi
-          if [ "${{ matrix.level }}" = "major" ]; then
+          if [ "$MATRIX_LEVEL" = "major" ]; then
             args+=(--next-major)
           fi
 
@@ -187,7 +194,7 @@ jobs:
       - name: Discard Terraform working directories
         run: find . -type d -name .terraform -prune -exec rm -rf {} +
 
-      - uses: peter-evans/create-pull-request@v6
+      - uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c # v6.1.0
         if: steps.upgrade.outputs.has_changes == 'true'
         with:
           # The branch is derived from the target version, so a re-run updates

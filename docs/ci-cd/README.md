@@ -169,12 +169,14 @@ After `terraform get`:
 MODULE   SOURCE             CONSTRAINT            UPGRADE  BLOCKED
 .        hashicorp/azurerm  >= 4.11.0, <= 4.19.0  major    dep
 
-hashicorp/azurerm in . is capped at 4.19.0, not by this repository.
+hashicorp/azurerm in . is capped at 4.19.0 by another module.
   imposed by:  terraform-azurerm-regions v2.0.0
                terraform-azurerm-resource-group v3.0.0
 ```
 
-`yes` says "fix it here". `dep` says "you cannot fix it here" and names who can.
+`yes` says "fix it here". `dep` says "fix it in the module that imposes the
+ceiling" and names it: a registry module needs a new release, while a shared
+module in the same repository can be widened in the same pull request.
 Skip the vendoring step and the workflow tells you the first thing, which is
 wrong. `terraform get` fetches modules only, not providers, so it is cheap and
 needs no cloud credentials.
