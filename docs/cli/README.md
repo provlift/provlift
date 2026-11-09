@@ -413,7 +413,7 @@ provlift version --json
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1` | Error, a refused/unsupported operation, or `check --exit-code` with one or more registry lookup failures (including a missing or timed-out Terraform, or a lock result `upgrade` refuses) |
+| `1` | Error, a refused/unsupported operation (including a missing or timed-out Terraform, or a lock result `upgrade` refuses), or `check --exit-code` with one or more registry lookup failures |
 | `2` | `check --exit-code`: upgrades are available and all lookups succeeded; `drift --exit-code`: inconsistencies found |
 | `3` | Terraform reported a failure (`fmt`, `init`, `providers lock`, `validate` or `plan`) |
 

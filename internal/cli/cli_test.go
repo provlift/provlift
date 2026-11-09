@@ -1324,6 +1324,9 @@ func TestCheckExitCodeSignalsRegistryLookupFailures(t *testing.T) {
 	if code := exitCode(t, err); code != ExitError {
 		t.Fatalf("exit code = %d, want %d: %v", code, ExitError, err)
 	}
+	if !strings.Contains(err.Error(), "1 registry lookup(s) failed") {
+		t.Fatalf("lookup failure was not explained: %v", err)
+	}
 	if !strings.Contains(h.stdout.String(), "6.13.0") {
 		t.Errorf("the working provider should still be reported:\n%s", h.stdout.String())
 	}

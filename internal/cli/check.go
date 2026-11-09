@@ -332,7 +332,7 @@ Read-only: this command never modifies files.`,
 
 			if exitCode {
 				if lookupFailures > 0 {
-					return exitWith(ExitError, nil)
+					return exitWith(ExitError, fmt.Errorf("%d registry lookup(s) failed", lookupFailures))
 				}
 				if upgradable > 0 {
 					return exitWith(ExitUpgradesAvailable, nil)
