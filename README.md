@@ -67,6 +67,8 @@ wrinkles they are not designed to handle:
 - **Root vs shared modules.** A root configuration moves its locked version; a
   shared module raises its supported floor. `provlift` knows the difference.
 
+See the [FAQ and tool comparison](docs/faq/README.md) for a side-by-side feature comparison with Renovate, Dependabot and tfupdate, plus configuration snippets for running them together.
+
 ## Features
 
 - **`list`** — offline inventory of every `required_providers` entry, with file
@@ -126,6 +128,7 @@ and building from source.
 | `.provlift.yaml` and OpenTofu | [Configuration](docs/configuration/README.md) |
 | Private registry credentials | [Authentication](docs/authentication/README.md) |
 | CI and pull-request automation | [CI/CD workflows](docs/ci-cd/README.md) |
+| Frequently asked questions & tool comparison | [FAQ](docs/faq/README.md) |
 | Errors and known limitations | [Troubleshooting](docs/troubleshooting/README.md) |
 | Components and design | [Architecture](docs/architecture/README.md) |
 | Tests and releases | [Development](docs/development/README.md) |
