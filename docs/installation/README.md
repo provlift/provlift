@@ -36,7 +36,22 @@ go install github.com/provlift/provlift/cmd/provlift@v0.1.0
 ```
 
 `provlift version` reads the release tag from Go build metadata when installed
-with `go install ...@<tag>`. A local build from a clone reports `dev`.
+with `go install ...@<tag>`; such a build records no commit or build date, so
+the output shows only the version and the Go toolchain:
+
+```text
+provlift v0.1.0 (go1.26.6 linux/amd64)
+```
+
+A local build from a clone (`go build ./cmd/provlift`) reports a Go
+pseudo-version with the commit and the commit time Go recorded, and `-dirty`
+when the working tree had uncommitted changes:
+
+```text
+provlift v0.0.0-20261031204117-f8a6c44d1354 (commit f8a6c44d1354, built 2026-10-31T20:41:17Z, go1.27.0 linux/amd64)
+```
+
+Release archives stamp the version, commit and date at build time instead.
 
 ### 3.2 Put the Go bin directory on `PATH`
 
