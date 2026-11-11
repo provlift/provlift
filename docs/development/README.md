@@ -54,6 +54,7 @@ pull request:
 | Cross-compile | linux, darwin and windows on amd64 and arm64 |
 | Lint workflows | `actionlint` over `.github/workflows` *and* `examples/workflows` |
 | End to end | A real upgrade against the real registry and real Terraform |
+| End to end against OpenTofu | The same upgrade with real `tofu`; the lock file must record `registry.opentofu.org` |
 
 The race detector runs on every commit because CGO is free on Linux runners.
 
@@ -62,6 +63,11 @@ Terraform, which means they cannot catch a change in either. It upgrades a
 throwaway module, then asserts the comment in the edited file survived, that
 Terraform produced a lock file, that every Terraform command exited zero, and
 that running the upgrade a second time plans nothing further.
+
+A second job repeats the upgrade with OpenTofu (`--terraform-binary tofu`). It
+asserts that the lock file records `registry.opentofu.org/hashicorp/null`, that
+every `tofu` command exited zero, and that `provlift check` pairs the lock entry
+with the requirement (the current version comes from the lock file).
 
 The `examples/workflows` files are linted because users copy them verbatim into
 their own repositories, so a broken one is shipped breakage.
