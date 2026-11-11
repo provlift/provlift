@@ -262,3 +262,73 @@ jobs:
             jq '.plan.actions' "$RUNNER_TEMP/same-target.json"
             exit 1
           }
+
+  end-to-end-opentofu:
+    name: End to end against OpenTofu
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          # The wrapper replaces tofu with a script that rewrites stdout,
+          # which this tool parses.
+          tofu_wrapper: false
+
+      - name: Build
+        run: go build -o "$RUNNER_TEMP/provlift" ./cmd/provlift
+
+      # Provider sources without a hostname resolve to registry.opentofu.org
+      # under OpenTofu. Unit tests cover that; this proves a real tofu run
+      # writes the same host to the lock file and provlift pairs it back.
+      - name: Upgrade a real module with OpenTofu
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/fixture"
+          mkdir -p "$work"
+          cat > "$work/versions.tf" <<'TF'
+          terraform {
+            required_version = ">= 1.6.0"
+
+            required_providers {
+              null = {
+                source  = "hashicorp/null"
+                version = "~> 3.1.0"
+              }
+            }
+          }
+          TF
+
+          "$RUNNER_TEMP/provlift" upgrade --dir "$work" --terraform-binary tofu --level minor --json > "$RUNNER_TEMP/result.json"
+
+          echo "--- .terraform.lock.hcl ---"
+          cat "$work/.terraform.lock.hcl"
+
+          grep -q '^provider "registry.opentofu.org/hashicorp/null"' "$work/.terraform.lock.hcl" \
+            || { echo "::error::the lock file does not record registry.opentofu.org/hashicorp/null"; exit 1; }
+          if grep -q 'registry.terraform.io' "$work/.terraform.lock.hcl"; then
+            echo "::error::the lock file records registry.terraform.io"; exit 1
+          fi
+
+          # Every OpenTofu command the tool ran (init, providers lock, validate) must have succeeded.
+          jq -e '(.terraform_runs | length) > 0 and all(.terraform_runs[]; .ok)' "$RUNNER_TEMP/result.json" > /dev/null \
+            || { echo "::error::an OpenTofu command failed"; jq '.terraform_runs' "$RUNNER_TEMP/result.json"; exit 1; }
+
+          # provlift must pair the lock entry with the requirement, so the
+          # current version comes from the lock file, not the constraint floor.
+          "$RUNNER_TEMP/provlift" check --dir "$work" --terraform-binary tofu --json > "$RUNNER_TEMP/check.json"
+          jq -e '.providers | length == 1 and
+                 .[0].source == "registry.opentofu.org/hashicorp/null" and
+                 .[0].current_source == "lock" and
+                 .[0].current == "3.1.1"' "$RUNNER_TEMP/check.json" > /dev/null || {
+            echo "::error::provlift did not pair the OpenTofu lock entry with the requirement"
+            jq '.providers' "$RUNNER_TEMP/check.json"
+            exit 1
+          }
