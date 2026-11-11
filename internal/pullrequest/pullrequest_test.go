@@ -170,6 +170,24 @@ func TestBodyIncludesVerificationResults(t *testing.T) {
 	}
 }
 
+func TestBodyEscapesRepositoryControlledMarkdown(t *testing.T) {
+	plan := &upgrade.Plan{Actions: []upgrade.Action{
+		action(t, "env|prod\nINJECT", "hashicorp/azurerm", "4.11.0", "4.19.0", upgrade.LevelMinor, false),
+	}}
+	runs := []TerraformRun{{Module: "env|prod\nINJECT", Command: "validate|bad\nINJECT", OK: true}}
+	modules := ModuleVersions{
+		Changes:    []ModuleChange{{Root: "root|a", Module: "mod\nINJECT", Source: "git|bad", From: "1", To: "2"}},
+		Unreadable: []UnreadableRoot{{Root: "root|bad", Error: "error\nINJECT"}},
+	}
+	pr := BuildWithModules(plan, runs, []string{"file|bad\nINJECT.tf"}, modules)
+	if strings.Contains(pr.Body, "| `env|prod") || strings.Contains(pr.Body, "\nINJECT") || strings.Contains(pr.Body, "| `root|a`") {
+		t.Fatalf("unescaped Markdown table or multiline injection:\n%s", pr.Body)
+	}
+	if !strings.Contains(pr.Body, "env\\|prod INJECT") || !strings.Contains(pr.Body, "root\\|a") {
+		t.Fatalf("escaped values missing:\n%s", pr.Body)
+	}
+}
+
 func TestBodyExplainsDependencyCeilings(t *testing.T) {
 	plan := &upgrade.Plan{
 		Actions: []upgrade.Action{
@@ -189,7 +207,7 @@ func TestBodyExplainsDependencyCeilings(t *testing.T) {
 	if !strings.Contains(pr.Body, "Not upgraded further") {
 		t.Errorf("body should explain the ceiling:\n%s", pr.Body)
 	}
-	if !strings.Contains(pr.Body, "<= 4.19.0") {
+	if !strings.Contains(pr.Body, "&lt;= 4.19.0") {
 		t.Errorf("body should name the constraint:\n%s", pr.Body)
 	}
 }
@@ -336,10 +354,10 @@ func TestBodyListsChangesVerificationAndModulesHeldBackByADependency(t *testing.
 
 	for _, want := range []string{
 		"## Changes",
-		"| `envs/prod` | `hashicorp/google` | 5.40.0 | 5.41.0 | minor | `< 5.41.0` -> `< 5.42.0` |",
+		"| `envs/prod` | `hashicorp/google` | 5.40.0 | 5.41.0 | minor | `&lt; 5.41.0` -> `&lt; 5.42.0` |",
 		"## Files changed", "- `envs/prod/versions.tf`",
 		"## Verification", "| `envs/prod` | `terraform validate` | :white_check_mark: passed |",
-		"## Not upgraded further", "- `hashicorp/google` in `envs/dev`: " + reason,
+		"## Not upgraded further", "- `hashicorp/google` in `envs/dev`: " + safeMarkdown(reason),
 	} {
 		if !strings.Contains(pr.Body, want) {
 			t.Errorf("body is missing %q:\n%s", want, pr.Body)
