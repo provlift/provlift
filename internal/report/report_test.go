@@ -99,6 +99,30 @@ func TestJSONIsIndentedAndParsable(t *testing.T) {
 	}
 }
 
+func TestJSONDoesNotEscapeHTML(t *testing.T) {
+	var buf bytes.Buffer
+
+	payload := map[string]string{
+		"pessimistic": "~> 5.0",
+		"range":       ">= 5.0, < 6.0",
+		"ampersand":   "a & b",
+	}
+	if err := JSON(&buf, payload); err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, `"~> 5.0"`) {
+		t.Errorf("~> was escaped:\n%s", out)
+	}
+	if !strings.Contains(out, `">= 5.0, < 6.0"`) {
+		t.Errorf(">= or < was escaped:\n%s", out)
+	}
+	if !strings.Contains(out, `"a & b"`) {
+		t.Errorf("& was escaped:\n%s", out)
+	}
+}
+
 func TestSectionUnderlinesTitle(t *testing.T) {
 	var buf bytes.Buffer
 	Section(&buf, "Planned upgrades")

@@ -36,6 +36,7 @@ func Table(w io.Writer, headers []string, rows [][]string) error {
 func JSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
 	return enc.Encode(v)
 }
 

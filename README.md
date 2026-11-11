@@ -79,7 +79,7 @@ wrinkles they are not designed to handle:
   (`--exact-level`, `--next-major`) upgrades; majors require `--allow-major`.
 - **`validate`** — `fmt -check` and `validate` across every root module, with
   opt-in `plan`.
-- **CI-ready** — stable JSON output, `--exit-code` gating, generated pull
+- **CI-ready** — stable [JSON output](docs/reference/json.md), `--exit-code` gating, generated pull
   request titles, branches and bodies, and copy-paste GitHub Actions
   [workflow examples](https://github.com/provlift/provlift/tree/main/examples/workflows).
   The CLI never needs a forge token.
@@ -130,6 +130,7 @@ and building from source.
 | Components and design | [Architecture](docs/architecture/README.md) |
 | Tests and releases | [Development](docs/development/README.md) |
 | Upstream Terraform and OpenTofu references | [Reference documentation](docs/reference/README.md) |
+| JSON output schema and reference | [JSON output reference](docs/reference/json.md) |
 
 A searchable command overview is published at
 [provlift.github.io/provlift](https://provlift.github.io/provlift/).
