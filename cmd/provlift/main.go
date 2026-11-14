@@ -27,10 +27,11 @@ func main() {
 	defer stop()
 
 	info, _ := debug.ReadBuildInfo()
+	commit, date := commitAndDateFromBuildInfo(buildCommit, buildDate, info)
 	root := cli.NewRootCommand(cli.BuildInfo{
 		Version: versionFromBuildInfo(buildVersion, info),
-		Commit:  buildCommit,
-		Date:    buildDate,
+		Commit:  commit,
+		Date:    date,
 	})
 
 	if err := cli.ExecuteContext(ctx, root, os.Args[1:]); err != nil {
@@ -51,4 +52,43 @@ func versionFromBuildInfo(stamped string, info *debug.BuildInfo) string {
 		return info.Main.Version
 	}
 	return stamped
+}
+
+// commitAndDateFromBuildInfo returns the commit and build date to report. Values
+// stamped with -ldflags win. Otherwise they come from the VCS settings Go records
+// in a build from a clone: vcs.revision shortened to 12 characters (as in a Go
+// pseudo-version), with -dirty when vcs.modified is true, and vcs.time. A build
+// with neither, such as `go install ...@vX.Y.Z`, gets empty strings rather than
+// placeholders.
+func commitAndDateFromBuildInfo(stampedCommit, stampedDate string, info *debug.BuildInfo) (commit, date string) {
+	var revision, modified, vcsTime string
+	if info != nil {
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				revision = setting.Value
+			case "vcs.modified":
+				modified = setting.Value
+			case "vcs.time":
+				vcsTime = setting.Value
+			}
+		}
+	}
+	commit, date = stampedCommit, stampedDate
+	if commit == "none" {
+		commit = ""
+		if revision != "" {
+			commit = revision
+			if len(commit) > 12 {
+				commit = commit[:12]
+			}
+			if modified == "true" {
+				commit += "-dirty"
+			}
+		}
+	}
+	if date == "unknown" {
+		date = vcsTime
+	}
+	return commit, date
 }
