@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.1](https://github.com/provlift/provlift/compare/v0.3.0...v0.3.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **check:** fail exit-code checks on registry lookup errors ([#62](https://github.com/provlift/provlift/issues/62)) ([12477e2](https://github.com/provlift/provlift/commit/12477e24d28fe48ddd4293e97f181c11a7cba747))
+* **ci:** pass workflow expressions through step environment ([#102](https://github.com/provlift/provlift/issues/102)) ([12e249f](https://github.com/provlift/provlift/commit/12e249fcbb35c190b6bdad8768d27ef06889b223))
+* **cli:** warn when PROVLIFT_TERRAFORM_BIN overrides explicit terraform.binary ([#93](https://github.com/provlift/provlift/issues/93)) ([#95](https://github.com/provlift/provlift/issues/95)) ([13c39de](https://github.com/provlift/provlift/commit/13c39decbbec54c13f7ba1ba5f6be4a6d18561ef))
+* **discovery:** skip .terragrunt-cache and report terragrunt.hcl directories ([#46](https://github.com/provlift/provlift/issues/46)) ([#97](https://github.com/provlift/provlift/issues/97)) ([cc42791](https://github.com/provlift/provlift/commit/cc42791bc06370d51c8cc06f2852bd510955afb5))
+* **upgrade:** report roots whose modules.json cannot be read after init ([#81](https://github.com/provlift/provlift/issues/81)) ([#101](https://github.com/provlift/provlift/issues/101)) ([c0deabe](https://github.com/provlift/provlift/commit/c0deabece28ace476caea15f59c04e0c61fde7a9))
+
 ## [0.3.0](https://github.com/provlift/provlift/compare/v0.2.0...v0.3.0) (2026-11-08)
 
 
