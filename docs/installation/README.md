@@ -104,9 +104,25 @@ version=v0.1.0
 archive="provlift_${version}_linux_amd64.tar.gz"
 curl -fsSLO "https://github.com/provlift/provlift/releases/download/${version}/${archive}"
 curl -fsSLO "https://github.com/provlift/provlift/releases/download/${version}/checksums.txt"
-grep " ./${archive}\$" checksums.txt | sed 's| \./| |' | sha256sum -c -
+sha256sum -c --ignore-missing checksums.txt
 tar -xzf "$archive"
 sudo install "provlift_${version}_linux_amd64/provlift" /usr/local/bin/provlift
+```
+
+On macOS, replace `sha256sum -c --ignore-missing checksums.txt` with
+`shasum -a 256 -c --ignore-missing checksums.txt`.
+
+For Windows PowerShell, download the matching `.zip` and `checksums.txt` into
+the same directory, then verify the ZIP before extracting it:
+
+```powershell
+$archive = "provlift_v0.1.0_windows_amd64.zip"
+$entry = Get-Content checksums.txt | Where-Object { $_.EndsWith(" $archive") }
+if (@($entry).Count -ne 1) { throw "Missing or duplicate checksum for $archive" }
+$expected = ($entry -split "\s+")[0]
+$actual = (Get-FileHash -Algorithm SHA256 $archive).Hash
+if ($actual -ne $expected) { throw "SHA-256 mismatch for $archive" }
+Write-Host "SHA-256 verified: $archive"
 ```
 
 ### 3.4 Build from a clone

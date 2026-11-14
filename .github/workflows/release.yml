@@ -103,7 +103,7 @@ jobs:
             echo "packaged ${name}"
           done
 
-          (cd dist && sha256sum ./*.tar.gz ./*.zip > checksums.txt)
+          (cd dist && sha256sum -- *.tar.gz *.zip > checksums.txt)
           cat dist/checksums.txt
 
       - name: Confirm the binary reports the tag

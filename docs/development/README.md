@@ -51,7 +51,7 @@ pull request:
 |---|---|
 | Format and vet | `gofmt`, `go mod tidy`, `go vet` |
 | Go unit and package tests | `go test -race ./...`, coverage ≥ 80% and uploaded coverage report |
-| Cross-compile | linux, darwin and windows on amd64 and arm64 |
+| Cross-compile | linux and darwin on amd64 and arm64; windows on amd64 |
 | Lint workflows | `actionlint` over `.github/workflows` *and* `examples/workflows` |
 | End to end | A real upgrade against the real registry and real Terraform |
 
