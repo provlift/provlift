@@ -47,4 +47,8 @@ familiar examples used throughout the documentation.
 - [Cobra CLI framework](https://github.com/spf13/cobra)
 - [HCL](https://github.com/hashicorp/hcl)
 
+### 16.7 Machine-readable formats
+
+- [JSON output reference](json.md)
+
 ---

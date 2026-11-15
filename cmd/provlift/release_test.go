@@ -76,7 +76,7 @@ func TestReleasePipelineOrder(t *testing.T) {
 	if !strings.Contains(steps[build].Run, `version="${GITHUB_REF_NAME}"`) {
 		t.Fatal("binaries must be stamped with the tag being released")
 	}
-	if !strings.Contains(steps[checksums].Run, "sha256sum ./*.tar.gz ./*.zip > checksums.txt") {
+	if !strings.Contains(steps[checksums].Run, "sha256sum -- *.tar.gz *.zip > checksums.txt") {
 		t.Fatal("checksums must cover every published archive")
 	}
 	files, _ := steps[publish].With["files"].(string)

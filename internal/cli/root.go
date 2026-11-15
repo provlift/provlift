@@ -7,6 +7,7 @@ import (
 	"io"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -89,6 +90,20 @@ func ExecuteContext(ctx context.Context, root *cobra.Command, arguments []string
 	return exitWith(ExitError, err)
 }
 
+// versionDetails lists what `provlift version` prints in parentheses. A commit
+// or date that is not known is left out instead of printed as a placeholder;
+// the JSON output keeps both keys, as empty strings.
+func versionDetails(build BuildInfo) []string {
+	var details []string
+	if build.Commit != "" {
+		details = append(details, "commit "+build.Commit)
+	}
+	if build.Date != "" {
+		details = append(details, "built "+build.Date)
+	}
+	return append(details, runtime.Version()+" "+runtime.GOOS+"/"+runtime.GOARCH)
+}
+
 func newVersionCommand(g *globalOptions, build BuildInfo) *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
@@ -105,8 +120,7 @@ func newVersionCommand(g *globalOptions, build BuildInfo) *cobra.Command {
 			if g.jsonOut {
 				return writeJSON(g, info)
 			}
-			_, err := fmt.Fprintf(g.stdout(), "provlift %s (commit %s, built %s, %s %s/%s)\n",
-				build.Version, build.Commit, build.Date, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+			_, err := fmt.Fprintf(g.stdout(), "provlift %s (%s)\n", build.Version, strings.Join(versionDetails(build), ", "))
 			return err
 		},
 	}

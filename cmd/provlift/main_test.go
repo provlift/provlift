@@ -50,6 +50,48 @@ func TestVersionFromBuildInfo(t *testing.T) {
 	}
 }
 
+func TestCommitAndDateFromBuildInfo(t *testing.T) {
+	vcs := func(settings ...string) *debug.BuildInfo {
+		info := &debug.BuildInfo{}
+		for i := 0; i+1 < len(settings); i += 2 {
+			info.Settings = append(info.Settings, debug.BuildSetting{Key: settings[i], Value: settings[i+1]})
+		}
+		return info
+	}
+	const revision = "f8a6c44d135405bbb252bf449530b093d6756f98"
+	tests := []struct {
+		name                       string
+		stampedCommit, stampedDate string
+		info                       *debug.BuildInfo
+		wantCommit, wantDate       string
+	}{
+		{"clean clone", "none", "unknown",
+			vcs("vcs.revision", revision, "vcs.time", "2026-10-31T20:41:17Z", "vcs.modified", "false"),
+			"f8a6c44d1354", "2026-10-31T20:41:17Z"},
+		{"uncommitted changes", "none", "unknown",
+			vcs("vcs.revision", revision, "vcs.time", "2026-10-31T20:41:17Z", "vcs.modified", "true"),
+			"f8a6c44d1354-dirty", "2026-10-31T20:41:17Z"},
+		{"short revision", "none", "unknown", vcs("vcs.revision", "abc123"), "abc123", ""},
+		{"go install of a tag has no vcs settings", "none", "unknown",
+			&debug.BuildInfo{Main: debug.Module{Version: "v0.0.2"}}, "", ""},
+		{"no build metadata", "none", "unknown", nil, "", ""},
+		{"release ldflags take precedence", "0123abc", "2026-01-02T03:04:05Z",
+			vcs("vcs.revision", revision, "vcs.time", "2026-10-31T20:41:17Z", "vcs.modified", "true"),
+			"0123abc", "2026-01-02T03:04:05Z"},
+		{"each stamp is kept on its own", "0123abc", "unknown",
+			vcs("vcs.revision", revision, "vcs.time", "2026-10-31T20:41:17Z"),
+			"0123abc", "2026-10-31T20:41:17Z"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			commit, date := commitAndDateFromBuildInfo(tc.stampedCommit, tc.stampedDate, tc.info)
+			if commit != tc.wantCommit || date != tc.wantDate {
+				t.Errorf("commitAndDateFromBuildInfo = (%q, %q), want (%q, %q)", commit, date, tc.wantCommit, tc.wantDate)
+			}
+		})
+	}
+}
+
 func TestProcessExitCodes(t *testing.T) {
 	// Two roots locking the same provider at different versions: drift to
 	// report, and modules for validate to run Terraform in. Nothing here

@@ -67,6 +67,8 @@ wrinkles they are not designed to handle:
 - **Root vs shared modules.** A root configuration moves its locked version; a
   shared module raises its supported floor. `provlift` knows the difference.
 
+See the [FAQ and tool comparison](docs/faq/README.md) for a side-by-side feature comparison with Renovate, Dependabot and tfupdate, plus configuration snippets for running them together.
+
 ## Features
 
 - **`list`** — offline inventory of every `required_providers` entry, with file
@@ -79,7 +81,7 @@ wrinkles they are not designed to handle:
   (`--exact-level`, `--next-major`) upgrades; majors require `--allow-major`.
 - **`validate`** — `fmt -check` and `validate` across every root module, with
   opt-in `plan`.
-- **CI-ready** — stable JSON output, `--exit-code` gating, generated pull
+- **CI-ready** — stable [JSON output](docs/reference/json.md), `--exit-code` gating, generated pull
   request titles, branches and bodies, and copy-paste GitHub Actions
   [workflow examples](https://github.com/provlift/provlift/tree/main/examples/workflows).
   The CLI never needs a forge token.
@@ -126,10 +128,12 @@ and building from source.
 | `.provlift.yaml` and OpenTofu | [Configuration](docs/configuration/README.md) |
 | Private registry credentials | [Authentication](docs/authentication/README.md) |
 | CI and pull-request automation | [CI/CD workflows](docs/ci-cd/README.md) |
+| Frequently asked questions & tool comparison | [FAQ](docs/faq/README.md) |
 | Errors and known limitations | [Troubleshooting](docs/troubleshooting/README.md) |
 | Components and design | [Architecture](docs/architecture/README.md) |
 | Tests and releases | [Development](docs/development/README.md) |
 | Upstream Terraform and OpenTofu references | [Reference documentation](docs/reference/README.md) |
+| JSON output schema and reference | [JSON output reference](docs/reference/json.md) |
 
 A searchable command overview is published at
 [provlift.github.io/provlift](https://provlift.github.io/provlift/).

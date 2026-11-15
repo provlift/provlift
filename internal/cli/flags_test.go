@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -425,6 +426,47 @@ func TestVersionCommandJSON(t *testing.T) {
 	var info map[string]string
 	if err := json.Unmarshal(h.stdout.Bytes(), &info); err != nil || info["version"] != "1.2.3" {
 		t.Fatalf("version --json = %v: %s", err, h.stdout.String())
+	}
+}
+
+func TestVersionCommandText(t *testing.T) {
+	platform := runtime.Version() + " " + runtime.GOOS + "/" + runtime.GOARCH
+	for _, tc := range []struct {
+		name  string
+		build BuildInfo
+		want  string
+	}{
+		{"commit and date", BuildInfo{Version: "v0.3.1", Commit: "f8a6c44d1354-dirty", Date: "2026-10-31T20:41:17Z"},
+			"provlift v0.3.1 (commit f8a6c44d1354-dirty, built 2026-10-31T20:41:17Z, " + platform + ")\n"},
+		{"neither known", BuildInfo{Version: "v0.3.1"}, "provlift v0.3.1 (" + platform + ")\n"},
+		{"date only", BuildInfo{Version: "dev", Date: "2026-10-31T20:41:17Z"},
+			"provlift dev (built 2026-10-31T20:41:17Z, " + platform + ")\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, nil)
+			if err := h.runWithGlobalFlags(newVersionCommand(h.opts, tc.build)); err != nil {
+				t.Fatal(err)
+			}
+			if got := h.stdout.String(); got != tc.want {
+				t.Errorf("version = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVersionCommandJSONKeepsUnknownKeys(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.runWithGlobalFlags(newVersionCommand(h.opts, BuildInfo{Version: "v0.3.1"}), "--json"); err != nil {
+		t.Fatal(err)
+	}
+	var info map[string]string
+	if err := json.Unmarshal(h.stdout.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"commit", "date"} {
+		if value, ok := info[key]; !ok || value != "" {
+			t.Errorf("version --json %s = %q (present %v), want an empty string", key, value, ok)
+		}
 	}
 }
 

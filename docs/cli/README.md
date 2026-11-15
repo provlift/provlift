@@ -18,7 +18,7 @@ Available on every command.
 | Flag | Default | Description |
 |---|---|---|
 | `-C`, `--dir` | `.` | Repository directory to scan |
-| `--json` | `false` | Emit machine-readable JSON instead of a table |
+| `--json` | `false` | Emit machine-readable JSON instead of a table (see [JSON output reference](../reference/json.md)) |
 | `--exclude` | none | Glob of directories to skip (repeatable; a comma is part of the glob, as in `modules/{a,b}`) |
 | `--terraform-binary` | `terraform` | Executable to drive, for example `tofu` for OpenTofu; overrides `PROVLIFT_TERRAFORM_BIN` and repository config |
 | `--timeout` | `15m` | Timeout for a single Terraform command |
