@@ -333,3 +333,120 @@ func TestDriftJSONIsParsable(t *testing.T) {
 		t.Errorf("source = %q, want the full address", payload.Findings.Skew[0].Source)
 	}
 }
+
+// divergentRepo has a shared module with an open floor next to two
+// environments locked at different versions: skew, divergence and an
+// unpinned root module all at once.
+func divergentRepo() map[string]map[string]string {
+	return map[string]map[string]string{
+		"modules/net": moduleFiles("hashicorp/aws", ">= 4.0", ""),
+		"envs/prod":   moduleFiles("hashicorp/aws", ">= 5.0, < 6.0", "5.10.0"),
+		"envs/dev":    moduleFiles("hashicorp/aws", ">= 5.0, < 6.0", "5.11.0"),
+		"envs/qa":     moduleFiles("hashicorp/aws", ">= 5.0, < 6.0", ""),
+	}
+}
+
+func driftExit(t *testing.T, err error) int {
+	t.Helper()
+	if err == nil {
+		return 0
+	}
+	var exit *ExitCodeError
+	if !errors.As(err, &exit) {
+		t.Fatalf("err = %T(%v), want *ExitCodeError", err, err)
+	}
+	return exit.Code
+}
+
+func TestDriftRespectsProvidersIgnore(t *testing.T) {
+	repo := skewedRepo()
+	repo[""] = map[string]string{".provlift.yaml": "providers:\n  ignore:\n    - hashicorp/azurerm\n"}
+
+	h := newDriftHarness(t, repo)
+	h.opts.jsonOut = true
+	if err := h.run(t, newDriftCommand(h.opts), "--exit-code"); err != nil {
+		t.Fatalf("an ignored provider must not fail the gate: %v", err)
+	}
+	var payload struct {
+		Count int `json:"count"`
+	}
+	if err := json.Unmarshal(h.stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, h.stdout.String())
+	}
+	if payload.Count != 0 {
+		t.Errorf("count = %d, want 0 with the provider ignored:\n%s", payload.Count, h.stdout.String())
+	}
+
+	h = newDriftHarness(t, repo)
+	if err := h.run(t, newDriftCommand(h.opts), "--show-ignored"); err != nil {
+		t.Fatalf("drift: %v", err)
+	}
+	if !strings.Contains(h.stdout.String(), "hashicorp/azurerm") {
+		t.Errorf("--show-ignored should bring the provider back:\n%s", h.stdout.String())
+	}
+}
+
+func TestDriftModuleFilters(t *testing.T) {
+	t.Run("module glob", func(t *testing.T) {
+		h := newDriftHarness(t, divergentRepo())
+		if err := h.run(t, newDriftCommand(h.opts), "--module", "envs/**"); err != nil {
+			t.Fatalf("drift: %v", err)
+		}
+		out := h.stdout.String()
+		if strings.Contains(out, "modules/net") || strings.Contains(out, "Constraint divergence") {
+			t.Errorf("modules/net should be filtered out:\n%s", out)
+		}
+		if !strings.Contains(out, "Version skew") || !strings.Contains(out, "envs/qa") {
+			t.Errorf("envs findings missing:\n%s", out)
+		}
+	})
+
+	t.Run("roots only", func(t *testing.T) {
+		repo := divergentRepo()
+		repo["envs/prod"]["net.tf"] = "module \"net\" {\n  source = \"../../modules/net\"\n}\n"
+		h := newDriftHarness(t, repo)
+		if err := h.run(t, newDriftCommand(h.opts), "--roots-only"); err != nil {
+			t.Fatalf("drift: %v", err)
+		}
+		if out := h.stdout.String(); strings.Contains(out, "modules/net") {
+			t.Errorf("the child module should be filtered out:\n%s", out)
+		}
+	})
+}
+
+func TestDriftFailOn(t *testing.T) {
+	onlyDivergence := map[string]map[string]string{
+		"modules/net": moduleFiles("hashicorp/aws", ">= 4.0", ""),
+		"envs/prod":   moduleFiles("hashicorp/aws", ">= 5.0, < 6.0", "5.10.0"),
+		"envs/dev":    moduleFiles("hashicorp/aws", "~> 5.0", "5.10.0"),
+	}
+	onlyDivergence["envs/prod"]["net.tf"] = "module \"net\" {\n  source = \"../../modules/net\"\n}\n"
+
+	for _, tc := range []struct {
+		name string
+		repo map[string]map[string]string
+		args []string
+		want int
+	}{
+		{"divergence fails by default", onlyDivergence, []string{"--exit-code"}, ExitUpgradesAvailable},
+		{"skew gate ignores divergence", onlyDivergence, []string{"--fail-on", "skew", "--exit-code"}, 0},
+		{"skew gate fails on skew", divergentRepo(), []string{"--fail-on", "skew", "--exit-code"}, ExitUpgradesAvailable},
+		{"list of kinds", onlyDivergence, []string{"--fail-on", "skew,unpinned", "--exit-code"}, 0},
+		{"without --exit-code", divergentRepo(), []string{"--fail-on", "skew"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newDriftHarness(t, tc.repo)
+			if got := driftExit(t, h.run(t, newDriftCommand(h.opts), tc.args...)); got != tc.want {
+				t.Errorf("exit = %d, want %d:\n%s", got, tc.want, h.stdout.String())
+			}
+		})
+	}
+
+	t.Run("unknown kind", func(t *testing.T) {
+		h := newDriftHarness(t, divergentRepo())
+		err := h.run(t, newDriftCommand(h.opts), "--fail-on", "skw")
+		if driftExit(t, err) != ExitError || !strings.Contains(err.Error(), `unknown finding kind "skw"`) {
+			t.Errorf("err = %v, want an unknown-kind error", err)
+		}
+	})
+}

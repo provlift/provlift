@@ -13,8 +13,12 @@ import (
 
 func newDriftCommand(g *globalOptions) *cobra.Command {
 	var (
-		selectors []string
-		exitCode  bool
+		selectors   []string
+		modules     []string
+		rootsOnly   bool
+		showIgnored bool
+		failOn      []string
+		exitCode    bool
 	)
 
 	cmd := &cobra.Command{
@@ -41,15 +45,35 @@ credentials.`,
   provlift drift --provider azurerm
 
   # Fail a CI job when modules disagree
-  provlift drift --exit-code`,
+  provlift drift --exit-code
+
+  # Gate only on version skew; shared modules' open floors are expected
+  provlift drift --fail-on skew --exit-code
+
+  # Only the root modules under envs/
+  provlift drift --module "envs/**" --roots-only`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			kinds, err := drift.ParseKinds(failOn)
+			if err != nil {
+				return exitWith(ExitError, fmt.Errorf("--fail-on: %w", err))
+			}
+
 			ws, err := g.open()
 			if err != nil {
 				return exitWith(ExitError, err)
 			}
 
-			result := drift.Analyze(ws.inv, drift.Options{Selectors: selectors})
+			opts := drift.Options{
+				Selectors: selectors,
+				Module: func(mod *model.Module) bool {
+					return (!rootsOnly || mod.IsRoot) && moduleMatches(mod.RelDir, modules)
+				},
+			}
+			if !showIgnored {
+				opts.Ignored = ws.cfg.IsIgnored
+			}
+			result := drift.Analyze(ws.inv, opts)
 
 			if g.jsonOut {
 				if err := writeJSON(g, map[string]any{
@@ -65,7 +89,7 @@ credentials.`,
 				printDiagnostics(g, ws)
 			}
 
-			if exitCode && result.HasFindings() {
+			if exitCode && result.HasFindingsOf(kinds) {
 				return exitWith(ExitUpgradesAvailable, nil)
 			}
 			return nil
@@ -74,6 +98,10 @@ credentials.`,
 
 	f := cmd.Flags()
 	f.StringSliceVar(&selectors, "provider", nil, "only report on these providers (repeatable)")
+	f.StringSliceVar(&modules, "module", nil, "only analyse these module paths (repeatable, glob)")
+	f.BoolVar(&rootsOnly, "roots-only", false, "only analyse root modules")
+	f.BoolVar(&showIgnored, "show-ignored", false, "include providers excluded by configuration")
+	f.StringSliceVar(&failOn, "fail-on", nil, "finding kinds that make --exit-code fail: skew, divergence, unpinned (default all)")
 	f.BoolVar(&exitCode, "exit-code", false, "exit 2 when inconsistencies are found, for CI gating")
 	return cmd
 }

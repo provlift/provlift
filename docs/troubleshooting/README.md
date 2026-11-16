@@ -112,7 +112,8 @@
 
 - **Cause** — Different modules genuinely need different constraints.
 - **Fix** — Divergence is reported, not judged. Use `--provider` to narrow the
-  report, or treat the output as a review checklist rather than a failure.
+  report, or treat the output as a review checklist rather than a failure:
+  `--fail-on skew --exit-code` fails a pipeline on version skew only.
   Cosmetic differences such as `>=4.16.0` versus `>= 4.16.0` are normalised
   away and never reported.
 

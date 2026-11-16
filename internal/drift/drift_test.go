@@ -403,3 +403,27 @@ func TestNormalizeConstraintComparesMeaning(t *testing.T) {
 		})
 	}
 }
+
+func TestParseKinds(t *testing.T) {
+	all, err := ParseKinds(nil)
+	if err != nil || len(all) != 3 {
+		t.Fatalf("ParseKinds(nil) = %v, %v; want all three kinds", all, err)
+	}
+	got, err := ParseKinds([]string{"Skew", " unpinned "})
+	if err != nil || !got[KindSkew] || !got[KindUnpinned] || got[KindDivergence] {
+		t.Fatalf("ParseKinds = %v, %v", got, err)
+	}
+	if _, err := ParseKinds([]string{"skew", "drift"}); err == nil {
+		t.Fatal("an unknown kind must be an error")
+	}
+}
+
+func TestHasFindingsOf(t *testing.T) {
+	r := &Report{Divergence: []ConstraintDivergence{{Source: "hashicorp/aws"}}}
+	if r.HasFindingsOf(map[string]bool{KindSkew: true}) {
+		t.Error("divergence alone must not count for skew")
+	}
+	if !r.HasFindingsOf(map[string]bool{KindDivergence: true}) {
+		t.Error("divergence should count for divergence")
+	}
+}
