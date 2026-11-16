@@ -259,7 +259,7 @@ jobs:
                 cp "$lock_file" "$lock_backup"
                 had_lock=true
               fi
-              # shellcheck disable=SC2317 # invoked by the EXIT trap
+              # shellcheck disable=SC2317,SC2329 # invoked by the EXIT trap
               cleanup() {
                 rm -f "$override"
                 if [ "$had_lock" = "true" ]; then
