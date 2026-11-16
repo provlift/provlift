@@ -21,6 +21,9 @@
 
 ### 12.3 `provider not found in registry`
 
+`check` reports a requirement with no `source` as `provider not found; a bare
+name implies hashicorp/<name>, add an explicit source`.
+
 - **Cause** — The `source` address is wrong, or the provider lives on a host
   that does not implement the registry protocol.
 - **Fix** — Confirm the address on the registry. Remember that a bare local name
@@ -138,6 +141,17 @@
   provlift's own version lookups still query the registry API directly;
   mirror support for those is tracked in
   [#20](https://github.com/provlift/provlift/issues/20).
+
+### 12.17 `cannot reach registry <host>: <cause>`
+
+- **Cause** — The registry host could not be reached: its name does not
+  resolve (`no such host`), the connection was refused or timed out, or a proxy
+  or firewall blocks it.
+- **Fix** — Check the hostname in the provider's `source`, and that this
+  machine can reach `https://<host>/.well-known/terraform.json`. On a runner
+  without internet access, see 12.16.
+- With `--exit-code`, `check` exits `1` when any lookup fails, so an
+  unreachable registry fails the CI gate instead of passing it.
 
 ---
 

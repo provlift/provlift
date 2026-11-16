@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/provlift/provlift/internal/depgraph"
 	"github.com/provlift/provlift/internal/model"
+	"github.com/provlift/provlift/internal/registry"
 	"github.com/provlift/provlift/internal/report"
 	"github.com/provlift/provlift/internal/upgrade"
 )
@@ -39,9 +41,19 @@ func buildStatus(ws *workspace, deps map[string]rootDeps, vs versionSet, mod *mo
 	applyDependencyConstraints(ws, deps, mod, req, st, vs.Get(req.Address))
 
 	if err := vs.Err(req.Address); err != nil {
-		st.Error = err.Error()
+		st.Error = lookupErrorMessage(req, err)
 	}
 	return st
+}
+
+// lookupErrorMessage explains a failed registry lookup. A requirement without a
+// source resolves to hashicorp/<name>, so a provider published under another
+// namespace is "not found" until the module names its source.
+func lookupErrorMessage(req model.ProviderRequirement, err error) string {
+	if req.ImpliedSource && errors.Is(err, registry.ErrProviderNotFound) && strings.EqualFold(req.Address.Namespace, "hashicorp") {
+		return fmt.Sprintf("provider not found; a bare name implies hashicorp/%s, add an explicit source", req.Address.Type)
+	}
+	return err.Error()
 }
 
 // localConstraintKey identifies one provider requirement of one local module.

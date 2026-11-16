@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -279,6 +280,11 @@ func (c *Client) get(ctx context.Context, endpoint, host string) (body []byte, r
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if cause, ok := networkCause(err); ok && ctx.Err() == nil {
+			// DNS and connection failures read better as the host that could not
+			// be reached than as Go's full request error.
+			return nil, true, fmt.Errorf("cannot reach registry %s: %w", host, cause)
+		}
 		return nil, true, fmt.Errorf("requesting %s: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
@@ -305,4 +311,19 @@ func (c *Client) get(ctx context.Context, endpoint, host string) (body []byte, r
 	default:
 		return nil, false, fmt.Errorf("registry %s returned HTTP %d", host, resp.StatusCode)
 	}
+}
+
+// networkCause returns the DNS or connection error behind a failed request, or
+// false when the request failed for another reason, such as a refused redirect.
+func networkCause(err error) (error, bool) {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		return nil, false
+	}
+	var dnsErr *net.DNSError
+	var opErr *net.OpError
+	if errors.As(urlErr.Err, &dnsErr) || errors.As(urlErr.Err, &opErr) {
+		return urlErr.Err, true
+	}
+	return nil, false
 }

@@ -1314,6 +1314,48 @@ func TestRegistryFailureIsReportedPerProvider(t *testing.T) {
 	}
 }
 
+func TestCheckHintsAtExplicitSourceForBareNameNotFound(t *testing.T) {
+	h := newHarness(t, map[string]string{"main.tf": `terraform {
+  required_providers {
+    doesnotexist = {
+      version = "~> 1.0"
+    }
+    missing = {
+      source  = "hashicorp/missing"
+      version = "~> 1.0"
+    }
+  }
+}
+`})
+	h.opts.jsonOut = true
+
+	if err := h.run(t, newCheckCommand(h.opts)); err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	var got struct {
+		Providers []struct {
+			LocalName string `json:"local_name"`
+			Error     string `json:"error"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(h.stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decoding JSON: %v\n%s", err, h.stdout.String())
+	}
+	errs := map[string]string{}
+	for _, p := range got.Providers {
+		errs[p.LocalName] = p.Error
+	}
+
+	want := "provider not found; a bare name implies hashicorp/doesnotexist, add an explicit source"
+	if errs["doesnotexist"] != want {
+		t.Errorf("bare name error = %q, want %q", errs["doesnotexist"], want)
+	}
+	// An explicit source needs no hint about bare names.
+	if msg := errs["missing"]; msg == "" || strings.Contains(msg, "bare name") {
+		t.Errorf("explicit source error = %q, want the registry error without the bare-name hint", msg)
+	}
+}
+
 func TestCheckExitCodeSignalsRegistryLookupFailures(t *testing.T) {
 	h := newHarness(t, nil)
 	h.fake.versions = map[string][]string{

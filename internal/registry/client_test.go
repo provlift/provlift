@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -143,6 +145,41 @@ func TestVersionsUnknownProvider(t *testing.T) {
 	_, err := client.Versions(context.Background(), reg.address(t, "acme/nonexistent"))
 	if !errors.Is(err, ErrProviderNotFound) {
 		t.Errorf("err = %v, want ErrProviderNotFound", err)
+	}
+}
+
+func TestVersionsNamesUnreachableRegistry(t *testing.T) {
+	reg := newTestRegistry(t, azurermVersions)
+	reg.server.Close() // nothing listens on the address any more: connection refused
+
+	client := reg.client()
+	_, err := client.Versions(context.Background(), reg.address(t, "hashicorp/azurerm"))
+	if err == nil {
+		t.Fatal("Versions succeeded against a closed server")
+	}
+	if want := "cannot reach registry " + reg.host + ": "; !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %v, want it to contain %q", err, want)
+	}
+	if strings.Contains(err.Error(), "requesting ") {
+		t.Errorf("err = %v, want the cause without Go's request wrapper", err)
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		t.Errorf("err = %v, want the network error kept in the chain", err)
+	}
+}
+
+func TestNetworkCauseIgnoresNonNetworkErrors(t *testing.T) {
+	dns := &net.DNSError{Err: "no such host", Name: "tf.invalid-host.example", IsNotFound: true}
+	if cause, ok := networkCause(&url.Error{Op: "Get", URL: "https://tf.invalid-host.example", Err: dns}); !ok || cause != error(dns) {
+		t.Errorf("networkCause(DNS error) = %v, %v; want the DNS error", cause, ok)
+	}
+	redirect := &url.Error{Op: "Get", URL: "https://x", Err: errors.New("registry redirect changed host or scheme")}
+	if _, ok := networkCause(redirect); ok {
+		t.Error("a refused redirect is not a network failure")
+	}
+	if _, ok := networkCause(errors.New("plain")); ok {
+		t.Error("an error that is not a *url.Error is not a network failure")
 	}
 }
 
