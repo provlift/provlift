@@ -118,8 +118,13 @@ jobs:
           echo "Providers with an upgrade to raise: $count"
 
           # Surface the reasons so a run that raises nothing is still
-          # explicable from the job log.
-          jq -r '.plan.skipped[]? | "skipped \(.module) \(.source): \(.reason)"' "$RUNNER_TEMP/plan.json"
+          # explicable from the job log. Never let repository-controlled
+          # fields introduce a new line that Actions could parse as a command.
+          jq -r '
+            def log_safe: tostring | gsub("[\\r\\n]"; " ");
+            .plan.skipped[]?
+            | "skipped \(.module | log_safe) \(.source | log_safe): \(.reason | log_safe)"
+          ' "$RUNNER_TEMP/plan.json"
 
   upgrade:
     name: ${{ matrix.provider }}

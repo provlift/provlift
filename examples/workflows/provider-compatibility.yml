@@ -149,9 +149,10 @@ jobs:
           set -euo pipefail
           provlift check --json > "$RUNNER_TEMP/check.json"
           jq -r '
+            def command_safe: tostring | gsub("%"; "%25") | gsub("\\r"; "%0D") | gsub("\\n"; "%0A");
             .providers[]
             | select(.blocked_by_dependency)
-            | "::warning title=Provider capped upstream::\(.source) in \(.module) cannot go above \(.latest_reachable) (\(.latest) is published). Imposed by: \((.external_sources // ["an unidentified dependency"]) | join(", ")). Release those modules with a wider ceiling first."
+            | "::warning title=Provider capped upstream::\(.source | command_safe) in \(.module | command_safe) cannot go above \(.latest_reachable | command_safe) (\(.latest | command_safe) is published). Imposed by: \((.external_sources // ["an unidentified dependency"]) | map(command_safe) | join(", ")). Release those modules with a wider ceiling first."
           ' "$RUNNER_TEMP/check.json"
 
       # Fail loudly on a missing or mistyped provider. Otherwise the plan below
@@ -226,13 +227,15 @@ jobs:
 
           if [ -n "$target_version" ]; then
             rejected_skips=$(jq -r --arg target "$target_version" '
+              def command_safe: tostring | gsub("%"; "%25") | gsub("\\r"; "%0D") | gsub("\\n"; "%0A");
               [.plan.skipped[]?
                | select(.reason | startswith($target + " is not newer than the current version ") | not)
-               | "\(.module): \(.reason)"]
-              | join("\n")
+               | "\(.module | command_safe): \(.reason | command_safe)"]
+              | join("; ")
             ' "$RUNNER_TEMP/result.json")
             if [ -n "$rejected_skips" ]; then
-              echo "::error::explicit target $target_version was skipped by the requested level or provider policy: $rejected_skips"
+              safe_target=$(jq -Rn --arg value "$target_version" '$value | gsub("%"; "%25") | gsub("\\r"; "%0D") | gsub("\\n"; "%0A")')
+              echo "::error::explicit target $safe_target was skipped by the requested level or provider policy: $rejected_skips"
               exit 1
             fi
           fi

@@ -348,6 +348,22 @@ func TestUpgradeWorkerRefusesUnacknowledgedMajor(t *testing.T) {
 	}
 }
 
+func TestDiscoverySkipLogCannotInjectWorkflowCommands(t *testing.T) {
+	step := findStep(t, readWorkflow(t, "provider-upgrades.yml"), "discover", "plan")
+	harness := newScriptHarness(t)
+	harness.responses = `{"minor":{"plan":{"actions":[],"skipped":[{"module":"@team\n::warning::MODULE","source":"@source\r::error::SOURCE","reason":"@user blocked\n::group::REASON"}]}}}`
+	output, err := harness.run(t, step, map[string]string{
+		"REQUESTED_LEVEL": "auto", "ALLOW_MAJOR": "false",
+	})
+	if err != nil {
+		t.Fatalf("discovery failed: %v\n%s", err, output)
+	}
+	const want = "skipped @team ::warning::MODULE @source ::error::SOURCE: @user blocked ::group::REASON"
+	if !strings.Contains(output, want) || strings.Contains(output, "\n::") || strings.Contains(output, "\r") || strings.Count(output, "skipped ") != 1 {
+		t.Fatalf("repository-controlled skip values must stay on one log line:\n%s", output)
+	}
+}
+
 func hasArgument(arguments []string, wanted string) bool {
 	for _, argument := range arguments {
 		if argument == wanted {
