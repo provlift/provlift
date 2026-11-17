@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/provlift/provlift/compare/v0.3.1...v0.4.0) (2026-11-17)
+
+
+### Features
+
+* **drift:** respect providers.ignore, add --module, --roots-only and --fail-on ([#112](https://github.com/provlift/provlift/issues/112)) ([721d683](https://github.com/provlift/provlift/commit/721d683b1eec12237a61a3f73331912cbf9a1d09))
+
+
+### Bug Fixes
+
+* **check:** explain bare-name 404s and unreachable registries ([#111](https://github.com/provlift/provlift/issues/111)) ([696b93b](https://github.com/provlift/provlift/commit/696b93bc52004522a02b8746b40e61218f4a3dca))
+* **security:** escape generated PR and workflow annotations ([#104](https://github.com/provlift/provlift/issues/104)) ([ffa25ec](https://github.com/provlift/provlift/commit/ffa25ece39919761cb4c916de919d8004fe566c7))
+
 ## [0.3.1](https://github.com/provlift/provlift/compare/v0.3.0...v0.3.1) (2026-11-16)
 
 
