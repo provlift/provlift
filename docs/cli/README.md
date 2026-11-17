@@ -168,7 +168,15 @@ the configuration reveals that.
 | Flag | Default | Description |
 |---|---|---|
 | `--provider` | all | Only report on these providers (repeatable) |
-| `--exit-code` | `false` | Exit `2` when inconsistencies are found |
+| `--module` | all | Only analyse these module paths (repeatable, glob), as in `check` |
+| `--roots-only` | `false` | Only analyse root modules |
+| `--show-ignored` | `false` | Include providers excluded by `providers.ignore` |
+| `--fail-on` | `skew,divergence,unpinned` | Finding kinds that make `--exit-code` fail |
+| `--exit-code` | `false` | Exit `2` when findings of a `--fail-on` kind are found |
+
+Like `list` and `check`, `drift` leaves out providers in `providers.ignore`
+unless `--show-ignored` is passed. `--fail-on` only changes the exit code: every
+finding is still reported.
 
 **Output**
 
@@ -203,6 +211,12 @@ provlift drift --provider google
 
 # Fail a CI job when modules disagree (exit 2)
 provlift drift --exit-code
+
+# Gate only on version skew: a shared module's open floor is divergence by design
+provlift drift --fail-on skew --exit-code
+
+# Only the root modules under envs/
+provlift drift --module "envs/**" --roots-only
 
 # Machine-readable findings
 provlift drift --json

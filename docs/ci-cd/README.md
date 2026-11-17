@@ -15,10 +15,15 @@ describes when to use each command.
 
 | Stage | Command | Gate |
 |---|---|---|
-| Consistency | `provlift drift --json --exit-code` | Offline; flags modules that disagree |
+| Consistency | `provlift drift --json --fail-on skew --exit-code` | Offline; fails when modules lock a provider at different versions |
 | Report | `provlift check --json --exit-code` | Informational; exit `2` means work exists |
 | Auto-patch | `provlift upgrade --level patch` | Raise a PR from the resulting diff |
 | Verify | `provlift validate --plan --backend` | Must pass before merge |
+
+Constraint divergence is expected wherever shared modules keep open floors (see
+[the upgrade guide](../upgrade/README.md)), so the consistency stage gates on
+version skew only; drop `--fail-on skew` to also fail on divergence and unpinned
+root modules.
 
 ### 11.2 Notes for CI
 

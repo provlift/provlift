@@ -8,6 +8,7 @@
 package drift
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -73,10 +74,63 @@ func (r *Report) Count() int {
 	return len(r.Skew) + len(r.Divergence) + len(r.Unpinned)
 }
 
+// Finding kinds, as named by --fail-on.
+const (
+	KindSkew       = "skew"
+	KindDivergence = "divergence"
+	KindUnpinned   = "unpinned"
+)
+
+// Kinds lists every finding kind, in report order.
+var Kinds = []string{KindSkew, KindDivergence, KindUnpinned}
+
+// ParseKinds reads a list of finding kinds. An empty list means all of them.
+func ParseKinds(names []string) (map[string]bool, error) {
+	kinds := map[string]bool{}
+	for _, name := range names {
+		name = strings.ToLower(strings.TrimSpace(name))
+		switch name {
+		case KindSkew, KindDivergence, KindUnpinned:
+			kinds[name] = true
+		default:
+			return nil, fmt.Errorf("unknown finding kind %q (want %s)", name, strings.Join(Kinds, ", "))
+		}
+	}
+	if len(kinds) == 0 {
+		for _, k := range Kinds {
+			kinds[k] = true
+		}
+	}
+	return kinds, nil
+}
+
+// HasFindingsOf reports whether there is at least one finding of the given kinds.
+func (r *Report) HasFindingsOf(kinds map[string]bool) bool {
+	return (kinds[KindSkew] && len(r.Skew) > 0) ||
+		(kinds[KindDivergence] && len(r.Divergence) > 0) ||
+		(kinds[KindUnpinned] && len(r.Unpinned) > 0)
+}
+
 // Options controls which checks run.
 type Options struct {
 	// Selectors limits the analysis to matching providers.
 	Selectors []string
+	// Ignored, when set, drops providers that configuration excludes
+	// (providers.ignore), as list and check do.
+	Ignored func(model.Address) bool
+	// Module, when set, limits the analysis to the modules it accepts.
+	Module func(*model.Module) bool
+}
+
+func (o Options) provider(addr model.Address) bool {
+	if o.Ignored != nil && o.Ignored(addr) {
+		return false
+	}
+	return matches(addr, o.Selectors)
+}
+
+func (o Options) module(mod *model.Module) bool {
+	return o.Module == nil || o.Module(mod)
 }
 
 // Analyze inspects an inventory for cross-module inconsistencies.
@@ -111,11 +165,11 @@ func findVersionSkew(inv *model.Inventory, opts Options) []VersionSkew {
 	providers := map[string]*entry{}
 
 	for _, mod := range inv.Modules {
-		if !mod.HasLockFile {
+		if !mod.HasLockFile || !opts.module(mod) {
 			continue
 		}
 		for _, lock := range mod.Locks {
-			if !matches(lock.Address, opts.Selectors) {
+			if !opts.provider(lock.Address) {
 				continue
 			}
 			key := lock.Address.String()
@@ -199,8 +253,11 @@ func findConstraintDivergence(inv *model.Inventory, opts Options) []ConstraintDi
 	providers := map[string]*entry{}
 
 	for _, mod := range inv.Modules {
+		if !opts.module(mod) {
+			continue
+		}
 		for _, req := range mod.Requirements {
-			if !matches(req.Address, opts.Selectors) {
+			if !opts.provider(req.Address) {
 				continue
 			}
 			key := req.Address.String()
@@ -252,13 +309,13 @@ func findUnpinned(inv *model.Inventory, opts Options) []Unpinned {
 	for _, mod := range inv.Modules {
 		// Only root modules own a lock file; a child module having none is
 		// normal and not a finding.
-		if !mod.IsRoot || mod.HasLockFile {
+		if !mod.IsRoot || mod.HasLockFile || !opts.module(mod) {
 			continue
 		}
 
 		var providers []string
 		for _, req := range mod.Requirements {
-			if matches(req.Address, opts.Selectors) {
+			if opts.provider(req.Address) {
 				providers = append(providers, model.DisplaySource(req.Address))
 			}
 		}
