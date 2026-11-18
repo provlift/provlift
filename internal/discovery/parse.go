@@ -59,11 +59,8 @@ func RequirementsInRegistry(dir, registryHost string) []model.ProviderRequiremen
 	parser := hclparse.NewParser()
 	var out []model.ProviderRequirement
 
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tf") {
-			continue
-		}
-		parsed, _ := parseFile(parser, dir, filepath.Join(dir, e.Name()), registryHost)
+	for _, name := range selectConfigFiles(entries, openTofuHost(registryHost)).HCL {
+		parsed, _ := parseFile(parser, dir, filepath.Join(dir, name), registryHost)
 		if parsed != nil {
 			out = append(out, parsed.requirements...)
 		}

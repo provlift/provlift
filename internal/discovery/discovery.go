@@ -150,23 +150,34 @@ func scanDir(parser *hclparse.Parser, root, dir, registryHost string) (*model.Mo
 	var diags []model.Diagnostic
 	hasTerragruntHCL := false
 	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		switch {
-		case name == "terragrunt.hcl":
+		if !e.IsDir() && e.Name() == "terragrunt.hcl" {
 			hasTerragruntHCL = true
-		case strings.HasSuffix(name, ".tf.json"):
-			diags = append(diags, model.Diagnostic{
-				Severity: "warning",
-				Summary:  "JSON configuration is not supported",
-				Detail:   "provider requirements in .tf.json files are ignored; edit them manually",
-				Pos:      model.SourcePos{File: relTo(root, filepath.Join(dir, name))},
-			})
-		case strings.HasSuffix(name, ".tf"):
-			tfFiles = append(tfFiles, filepath.Join(dir, name))
 		}
+	}
+
+	files := selectConfigFiles(entries, openTofuHost(registryHost))
+	for _, name := range files.JSON {
+		ext := ".tf.json"
+		if strings.HasSuffix(name, ".tofu.json") {
+			ext = ".tofu.json"
+		}
+		diags = append(diags, model.Diagnostic{
+			Severity: "warning",
+			Summary:  "JSON configuration is not supported",
+			Detail:   "provider requirements in " + ext + " files are ignored; edit them manually",
+			Pos:      model.SourcePos{File: relTo(root, filepath.Join(dir, name))},
+		})
+	}
+	if len(files.IgnoredTofu) > 0 {
+		diags = append(diags, model.Diagnostic{
+			Severity: "info",
+			Summary:  "OpenTofu files are ignored because the configured binary is Terraform",
+			Detail:   "set terraform.binary (or --terraform-binary) to tofu to read " + strings.Join(files.IgnoredTofu, ", "),
+			Pos:      model.SourcePos{File: relTo(root, filepath.Join(dir, files.IgnoredTofu[0]))},
+		})
+	}
+	for _, name := range files.HCL {
+		tfFiles = append(tfFiles, filepath.Join(dir, name))
 	}
 	if len(tfFiles) == 0 {
 		if hasTerragruntHCL {

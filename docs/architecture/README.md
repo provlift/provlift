@@ -222,7 +222,9 @@ from overriding an operator's trusted environment-selected executable.
 
 ### Other documented gaps
 
-- `.tf.json` is reported but not edited; a diagnostic is emitted.
+- `.tf.json` is reported but not edited; a diagnostic is emitted. With
+  OpenTofu, `.tofu` files are discovered and edited (`X.tofu` shadows `X.tf`)
+  and `.tofu.json` is treated like `.tf.json`.
 - Requirements built from variables or `for` expressions cannot be statically
   resolved and are reported as diagnostics.
 - Constraints using `!=` or multiple disjoint ranges are refused by design.
