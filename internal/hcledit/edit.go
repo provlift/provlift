@@ -46,6 +46,12 @@ var CacheDir = os.UserCacheDir
 // renameFile is os.Rename, replaced in tests to interrupt a replacement.
 var renameFile = os.Rename
 
+// isBackupName reports whether name is the backup of a configuration file
+// edited in place: a .tf file, or a .tofu file when OpenTofu is configured.
+func isBackupName(name string) bool {
+	return strings.HasSuffix(name, ".tf.provlift-backup") || strings.HasSuffix(name, ".tofu.provlift-backup")
+}
+
 // Recover restores interrupted atomic replacements before a write-mode scan.
 // Only backups recorded in the recovery journal are restored; any other
 // backup stops the run before a file is touched.
@@ -59,12 +65,12 @@ func Recover(root string, excludes []string) error {
 			if path != root && discovery.ShouldSkipDir(root, path, excludes) {
 				return filepath.SkipDir
 			}
-			if strings.HasSuffix(entry.Name(), ".tf.provlift-backup") {
+			if isBackupName(entry.Name()) {
 				return fmt.Errorf("refusing non-regular backup %s", path)
 			}
 			return nil
 		}
-		if !strings.HasSuffix(entry.Name(), ".tf.provlift-backup") {
+		if !isBackupName(entry.Name()) {
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 {

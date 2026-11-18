@@ -160,7 +160,12 @@ name implies hashicorp/<name>, add an explicit source`.
 
 ## 14. Known limitations
 
-- `.tf.json` configuration is reported but not edited; a warning is emitted.
+- `.tf.json` (and, with OpenTofu, `.tofu.json`) configuration is reported but not edited; a warning is emitted.
+- `.tofu` files are read only when the configured binary is OpenTofu
+  (`terraform.binary: tofu`, `--terraform-binary tofu` or
+  `PROVLIFT_TERRAFORM_BIN`). As in OpenTofu, `X.tofu` shadows `X.tf`, so the
+  `.tf` file is neither read nor edited. With Terraform, `.tofu` files are
+  skipped with an info diagnostic.
 - Provider requirements built from variables or `for` expressions cannot be
   statically resolved and are reported as diagnostics.
 - Constraints using `!=` or multiple disjoint ranges are refused, by design.
