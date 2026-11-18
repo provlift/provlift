@@ -406,7 +406,7 @@ during an upgrade. Use --plan to opt in.`,
 			failures := []string{}
 			if len(targets) == 0 {
 				if g.jsonOut {
-					if err := writeJSON(g, map[string]any{"runs": runs, "failures": failures}); err != nil {
+					if err := writeJSON(g, map[string]any{"runs": runs, "failures": failures, "config_file": ws.configFile}); err != nil {
 						return exitWith(ExitError, err)
 					}
 					return nil
@@ -482,7 +482,7 @@ during an upgrade. Use --plan to opt in.`,
 			}
 
 			if g.jsonOut {
-				if err := writeJSON(g, map[string]any{"runs": runs, "failures": failures}); err != nil {
+				if err := writeJSON(g, map[string]any{"runs": runs, "failures": failures, "config_file": ws.configFile}); err != nil {
 					return exitWith(ExitError, err)
 				}
 			} else {

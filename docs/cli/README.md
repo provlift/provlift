@@ -18,6 +18,7 @@ Available on every command.
 | Flag | Default | Description |
 |---|---|---|
 | `-C`, `--dir` | `.` | Repository directory to scan |
+| `--config` | discovered | Config file to use; overrides `PROVLIFT_CONFIG` and the search for `.provlift.yaml` from the scanned directory up to the repository root (see [configuration](../configuration/README.md#80-where-the-file-is-read-from)) |
 | `--json` | `false` | Emit machine-readable JSON instead of a table (see [JSON output reference](../reference/json.md)) |
 | `--exclude` | none | Glob of directories to skip (repeatable; a comma is part of the glob, as in `modules/{a,b}`) |
 | `--terraform-binary` | `terraform` | Executable to drive, for example `tofu` for OpenTofu; overrides `PROVLIFT_TERRAFORM_BIN` and repository config |

@@ -65,6 +65,7 @@ Reports all declared provider requirements across all discovered modules in the 
 | Field | Type | Description | Nullable / Optional |
 |---|---|---|---|
 | `root` | `string` | Absolute path of the repository root | Required |
+| `config_file` | `string` | Absolute path of the `.provlift.yaml` (or `--config` / `PROVLIFT_CONFIG` file) in use, or `""` when defaults apply | Required |
 | `providers` | `array` | List of provider requirements found (`null` if none) | Required / Nullable |
 | `providers[].module` | `string` | Module directory relative to repository root (`.` for root) | Required |
 | `providers[].is_root` | `boolean` | `true` if this module can be initialized by Terraform directly; `false` if called as a child module | Required |
@@ -136,6 +137,7 @@ Queries the provider registries to reconcile current versions against available 
 | Field | Type | Description | Nullable / Optional |
 |---|---|---|---|
 | `root` | `string` | Absolute path of the repository root | Required |
+| `config_file` | `string` | Absolute path of the `.provlift.yaml` (or `--config` / `PROVLIFT_CONFIG` file) in use, or `""` when defaults apply | Required |
 | `providers` | `array` | Reconciled upgrade status for each provider requirement (`null` if none) | Required / Nullable |
 | `providers[].module` | `string` | Relative path of the module | Required |
 | `providers[].local_name` | `string` | Local alias name | Required |
@@ -231,6 +233,7 @@ Reports cross-module inconsistencies across version locks, constraints, and unpi
 | Field | Type | Description | Nullable / Optional |
 |---|---|---|---|
 | `root` | `string` | Absolute path of the repository root | Required |
+| `config_file` | `string` | Absolute path of the `.provlift.yaml` (or `--config` / `PROVLIFT_CONFIG` file) in use, or `""` when defaults apply | Required |
 | `findings` | `object` | Grouped drift findings | Required |
 | `findings.version_skew` | `array` | Providers locked at different versions in different root modules (`null` if none) | Required / Nullable |
 | `findings.version_skew[].source` | `string` | Fully-qualified provider address | Required |
@@ -332,6 +335,7 @@ Executes or plans (`--dry-run`) provider updates across HCL declarations and loc
 | Field | Type | Description | Nullable / Optional |
 |---|---|---|---|
 | `dry_run` | `boolean` | `true` when `--dry-run` was set and no files were modified | Required |
+| `config_file` | `string` | Absolute path of the `.provlift.yaml` (or `--config` / `PROVLIFT_CONFIG` file) in use, or `""` when defaults apply | Required |
 | `plan` | `object` | Planned actions and skipped providers | Required |
 | `plan.actions` | `array` | Provider changes planned or applied (`[]` when none) | Required |
 | `plan.actions[].module` | `string` | Relative path of the target module | Required |
@@ -422,6 +426,7 @@ Runs formatting checks, initialization, validation, and optional planning across
 | `runs[].ok` | `boolean` | `true` if the command succeeded | Required |
 | `runs[].detail` | `string` | Diagnostic or error summary when `ok` is `false` | Optional (`omitempty`) |
 | `failures` | `array` | Failure summary strings (`"<module> (<command>): <detail>"`), or `[]` when all commands succeed | Required |
+| `config_file` | `string` | Absolute path of the `.provlift.yaml` (or `--config` / `PROVLIFT_CONFIG` file) in use, or `""` when defaults apply | Required |
 
 ---
 

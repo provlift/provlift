@@ -2,7 +2,7 @@
 
 ## 8. Configuration
 
-Optional `.provlift.yaml` in the repository root:
+Optional `.provlift.yaml`, usually in the repository root (see [8.0 Where the file is read from](#80-where-the-file-is-read-from)):
 
 ```yaml
 exclude:
@@ -47,14 +47,38 @@ also excludes module trees nested under environment folders. A matched directory
 and its descendants are skipped during both discovery and backup recovery.
 The `.git`, `.terraform`, and `node_modules` directories are always skipped.
 
+### 8.0 Where the file is read from
+
+provlift uses the first of these that applies:
+
+1. `--config <path>`
+2. the `PROVLIFT_CONFIG` environment variable
+3. the nearest `.provlift.yaml`: in the scanned directory (`-C` / `--dir`), then in each parent
+   directory up to and including the enclosing git repository's root (the directory holding
+   `.git`), or up to the filesystem root outside a repository
+4. defaults, when there is no file
+
+So `provlift upgrade -C envs/prod` still applies the repository root's `providers.ignore` and
+`max_level`. A file above the repository root is never used. An explicit path that does not exist
+is an error. If the search reaches a directory with `.provlift.yml` and no `.provlift.yaml`, provlift
+stops with `found .provlift.yml; provlift reads .provlift.yaml` rather than skip the policy.
+
+When the file in use is not in the scanned directory itself, provlift says so on stderr, for
+example `using config: ../../.provlift.yaml`. Every command's `--json` output carries the path as
+`config_file` (`""` when defaults apply).
+
+Relative paths in the file are read from the file's directory: `exclude` globs keep matching the
+paths they name when you scan a subdirectory (a glob that only matches outside the scanned
+directory has no effect), and a relative `terraform.fs_mirror` is resolved next to the file.
+
 ### 8.1 Keys
 
 | Key | Type | Default | Purpose |
 |---|---|---|---|
-| `exclude` | list of globs | none | Directories to skip, relative to the root |
+| `exclude` | list of globs | none | Directories to skip, relative to the config file's directory |
 | `platforms` | list of `os_arch` | `windows_amd64`, `linux_amd64`, `linux_arm64`, `darwin_amd64`, `darwin_arm64` | Platforms to record lock hashes for |
 | `terraform.binary` | string | `terraform` | Executable to drive: `terraform` or `tofu` |
-| `terraform.fs_mirror` | path | none | Filesystem mirror for `providers lock`; relative to the repository root |
+| `terraform.fs_mirror` | path | none | Filesystem mirror for `providers lock`; relative to the config file's directory |
 | `terraform.net_mirror` | HTTPS URL | none | Network mirror for `providers lock` |
 | `providers.ignore` | list of selectors | none | Providers the tool must never touch |
 | `providers.max_level` | map of selector to level | none | Per-provider cap: `patch`, `minor`, `major` or `none` |
@@ -98,7 +122,7 @@ Set `terraform.fs_mirror` (a directory) or `terraform.net_mirror` (an HTTPS base
 URL), or pass `--fs-mirror` / `--net-mirror` to `provlift upgrade`, and provlift
 passes it to `providers lock` as `-fs-mirror` or `-net-mirror`. Only one may be
 set, as the command accepts a single installation method. A flag replaces the
-configured mirror. A relative `fs_mirror` is read from the repository root and a
+configured mirror. A relative `fs_mirror` is read from the config file's directory (the repository root, usually) and a
 relative `--fs-mirror` from the working directory; both are passed as absolute
 paths because `providers lock` runs inside each root module.
 

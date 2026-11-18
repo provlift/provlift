@@ -78,6 +78,7 @@ credentials.`,
 			if g.jsonOut {
 				if err := writeJSON(g, map[string]any{
 					"root":        ws.inv.Root,
+					"config_file": ws.configFile,
 					"findings":    result,
 					"count":       result.Count(),
 					"diagnostics": ws.inv.Diagnostics,

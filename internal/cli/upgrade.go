@@ -121,6 +121,7 @@ func upgradeResult(dryRun bool) map[string]any {
 			Changes: []pullrequest.ModuleChange{}, NoBaseline: []string{}, Unreadable: []pullrequest.UnreadableRoot{},
 		},
 		"pull_request": pullrequest.Build(emptyPlan, nil, nil),
+		"config_file":  "",
 	}
 }
 
@@ -144,11 +145,11 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 		if err != nil {
 			return exitWith(ExitError, err)
 		}
-		cfg, err := config.Load(root)
+		cfg, err := g.loadConfig(root, false)
 		if err != nil {
 			return exitWith(ExitError, err)
 		}
-		excludes := append(append([]string{}, cfg.Exclude...), g.excludes...)
+		excludes := append(cfg.ExcludesFor(root), g.excludes...)
 		if err := hcledit.Recover(root, excludes); err != nil {
 			return exitWith(ExitError, fmt.Errorf("recovering interrupted writes: %w", err))
 		}
@@ -158,6 +159,7 @@ func runUpgrade(cmd *cobra.Command, g *globalOptions, opts *upgradeOptions) (out
 	if err != nil {
 		return exitWith(ExitError, err)
 	}
+	result["config_file"] = ws.configFile
 	// Requirements in unreadable or .tf.json files are never upgraded, so say
 	// so up front. Diagnostics go to stderr and leave --json output intact.
 	printDiagnostics(g, ws)
@@ -354,7 +356,11 @@ func resolveLockMirror(ws *workspace, opts *upgradeOptions) (terraform.LockMirro
 
 	mirror := terraform.LockMirror{FS: ws.cfg.Terraform.FSMirror, Net: ws.cfg.Terraform.NetMirror}
 	if mirror.FS != "" && !filepath.IsAbs(mirror.FS) {
-		mirror.FS = filepath.Join(ws.root, filepath.FromSlash(mirror.FS))
+		base := ws.cfg.Dir() // a relative mirror is read from the config file's directory
+		if base == "" {
+			base = ws.root
+		}
+		mirror.FS = filepath.Join(base, filepath.FromSlash(mirror.FS))
 	}
 	return mirror, nil
 }

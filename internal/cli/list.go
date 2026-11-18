@@ -90,6 +90,7 @@ This command is entirely offline; it never contacts a registry.`,
 			if g.jsonOut {
 				return writeJSON(g, map[string]any{
 					"root":        ws.inv.Root,
+					"config_file": ws.configFile,
 					"providers":   rows,
 					"diagnostics": ws.inv.Diagnostics,
 				})

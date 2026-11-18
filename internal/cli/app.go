@@ -51,6 +51,7 @@ func exitWith(code int, err error) error { return &ExitCodeError{Code: code, Err
 // globalOptions are the flags shared by every command.
 type globalOptions struct {
 	dir               string
+	configPath        string
 	jsonOut           bool
 	excludes          []string
 	tfBinary          string
@@ -68,6 +69,7 @@ type globalOptions struct {
 func (g *globalOptions) bind(cmd *cobra.Command) {
 	f := cmd.PersistentFlags()
 	f.StringVarP(&g.dir, "dir", "C", ".", "repository directory to scan")
+	f.StringVar(&g.configPath, "config", "", "config file to use instead of discovering "+config.FileName+" (or "+config.EnvVar+")")
 	f.BoolVar(&g.jsonOut, "json", false, "emit machine-readable JSON instead of a table")
 	// An array, not a slice: a comma belongs to a brace glob such as
 	// "modules/{a,b}" and must not split it into two broken patterns.
@@ -79,11 +81,13 @@ func (g *globalOptions) bind(cmd *cobra.Command) {
 
 // workspace is the resolved state every command operates on.
 type workspace struct {
-	root     string
-	cfg      *config.Config
-	inv      *model.Inventory
-	reg      *registry.Client
-	warnings io.Writer
+	root string
+	cfg  *config.Config
+	// configFile is the config file in use, or "" when defaults apply.
+	configFile string
+	inv        *model.Inventory
+	reg        *registry.Client
+	warnings   io.Writer
 }
 
 func (g *globalOptions) open() (*workspace, error) {
@@ -92,7 +96,7 @@ func (g *globalOptions) open() (*workspace, error) {
 		return nil, fmt.Errorf("resolving --dir: %w", err)
 	}
 
-	cfg, err := config.Load(root)
+	cfg, err := g.loadConfig(root, true)
 	if err != nil {
 		return nil, err
 	}
@@ -101,12 +105,12 @@ func (g *globalOptions) open() (*workspace, error) {
 	} else if envBinary := os.Getenv("PROVLIFT_TERRAFORM_BIN"); envBinary != "" {
 		if repoBinary := cfg.ExplicitBinary(); repoBinary != "" && repoBinary != envBinary {
 			fmt.Fprintf(g.stderr(), "warning: PROVLIFT_TERRAFORM_BIN=%s overrides terraform.binary: %s from %s\n",
-				envBinary, repoBinary, config.FileName)
+				envBinary, repoBinary, configName(root, cfg))
 		}
 		cfg.Terraform.Binary = envBinary
 	}
 
-	excludes := append(append([]string{}, cfg.Exclude...), g.excludes...)
+	excludes := append(cfg.ExcludesFor(root), g.excludes...)
 
 	inv, err := discovery.Scan(discovery.Options{
 		Root:         root,
@@ -125,7 +129,49 @@ func (g *globalOptions) open() (*workspace, error) {
 	if reg == nil {
 		reg = registry.New()
 	}
-	return &workspace{root: root, cfg: cfg, inv: inv, reg: reg, warnings: g.stderr()}, nil
+	return &workspace{root: root, cfg: cfg, configFile: cfg.Path(), inv: inv, reg: reg, warnings: g.stderr()}, nil
+}
+
+// loadConfig reads the config for a scan of root: --config, then
+// PROVLIFT_CONFIG, then the nearest .provlift.yaml from root up to the
+// repository root. With report set it says on stderr which file applies.
+func (g *globalOptions) loadConfig(root string, report bool) (*config.Config, error) {
+	explicit := g.configPath
+	if explicit == "" {
+		explicit = os.Getenv(config.EnvVar)
+	}
+	path, err := config.Locate(root, explicit)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	// The scan root's own file is the usual case and stays quiet; a file found
+	// in a parent directory or named explicitly is announced, so a policy
+	// applied from elsewhere is never a surprise. JSON output always carries
+	// config_file.
+	if report && path != "" && filepath.Dir(path) != root {
+		fmt.Fprintf(g.stderr(), "using config: %s\n", displayPath(root, path))
+	}
+	return cfg, nil
+}
+
+// displayPath shows path relative to root when that is shorter to read.
+func displayPath(root, path string) string {
+	if rel, err := filepath.Rel(root, path); err == nil {
+		return filepath.ToSlash(rel)
+	}
+	return path
+}
+
+// configName names the config file in messages, relative to root.
+func configName(root string, cfg *config.Config) string {
+	if cfg.Path() == "" {
+		return config.FileName
+	}
+	return displayPath(root, cfg.Path())
 }
 
 func warnAmbiguousSelectors(out io.Writer, inv *model.Inventory, selectors []string, deny bool) {

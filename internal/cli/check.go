@@ -259,6 +259,7 @@ Read-only: this command never modifies files.`,
 			if g.jsonOut {
 				if err := writeJSON(g, map[string]any{
 					"root":               ws.inv.Root,
+					"config_file":        ws.configFile,
 					"providers":          statuses,
 					"upgrades_available": upgradable,
 					"lookup_failures":    lookupFailures,

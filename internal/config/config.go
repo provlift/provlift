@@ -13,13 +13,21 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"gopkg.in/yaml.v3"
 
 	"github.com/provlift/provlift/internal/model"
 )
 
-// FileName is the config file looked for in the scan root.
+// FileName is the config file looked for in the scan root and its parents.
 const FileName = ".provlift.yaml"
+
+// AltFileName is the other common YAML extension. provlift does not read it,
+// so finding one is an error rather than a silently skipped policy.
+const AltFileName = ".provlift.yml"
+
+// EnvVar names an explicit config file, like --config.
+const EnvVar = "PROVLIFT_CONFIG"
 
 // Config is the repository-level configuration.
 type Config struct {
@@ -45,6 +53,25 @@ type Config struct {
 	Providers ProviderRules `yaml:"providers"`
 
 	explicitBinary string
+	path           string
+}
+
+// Path returns the file the configuration was read from, or "" for defaults.
+func (c *Config) Path() string {
+	if c == nil {
+		return ""
+	}
+	return c.path
+}
+
+// Dir returns the directory holding the config file, or "" for defaults.
+// Relative paths in the file (exclude globs, terraform.fs_mirror) are read
+// from here.
+func (c *Config) Dir() string {
+	if c.Path() == "" {
+		return ""
+	}
+	return filepath.Dir(c.path)
 }
 
 // ExplicitBinary returns the binary configured in .provlift.yaml, or "" if not explicitly set.
@@ -89,11 +116,65 @@ func Default() *Config {
 // Load reads FileName from root. A missing file yields defaults.
 func Load(root string) (*Config, error) {
 	path := filepath.Join(root, FileName)
-
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		return Default(), nil
 	}
+	return LoadFile(path)
+}
+
+// Locate finds the config file for a scan of root. An explicit path (from
+// --config or PROVLIFT_CONFIG) wins and must exist. Otherwise FileName is
+// looked for in root and then each parent, up to and including the enclosing
+// git repository's root (a directory holding .git), or the filesystem root
+// outside a repository. "" means there is none and defaults apply.
+func Locate(root, explicit string) (string, error) {
+	if explicit != "" {
+		path, err := filepath.Abs(explicit)
+		if err != nil {
+			return "", fmt.Errorf("resolving config file %s: %w", explicit, err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", fmt.Errorf("config file %s: %w", explicit, err)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("config file %s is a directory", explicit)
+		}
+		return path, nil
+	}
+	dir, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", root, err)
+	}
+	for {
+		path := filepath.Join(dir, FileName)
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("reading %s: %w", path, err)
+		}
+		if alt := filepath.Join(dir, AltFileName); exists(alt) {
+			return "", fmt.Errorf("found %s; provlift reads %s", alt, FileName)
+		}
+		parent := filepath.Dir(dir)
+		if exists(filepath.Join(dir, ".git")) || parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
+}
+
+func exists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+// LoadFile reads the config file at path; "" yields defaults.
+func LoadFile(path string) (*Config, error) {
+	if path == "" {
+		return Default(), nil
+	}
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
@@ -123,7 +204,57 @@ func Load(root string) (*Config, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	cfg.path = path
 	return cfg, nil
+}
+
+// ExcludesFor returns the exclude globs, which are written relative to the
+// config file's directory, rewritten relative to root, the directory being
+// scanned. root is normally that directory or below it. A glob that can only
+// match outside root is dropped; one whose leading segments match root's path
+// keeps the rest. A "**" segment can stand for any part of root's path, so the
+// glob from there on applies as is.
+func (c *Config) ExcludesFor(root string) []string {
+	dir := c.Dir()
+	if dir == "" || len(c.Exclude) == 0 {
+		return append([]string(nil), c.Exclude...)
+	}
+	rel, err := filepath.Rel(dir, root)
+	if err != nil || rel == "." {
+		return append([]string(nil), c.Exclude...)
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		// An explicit --config outside the scanned tree: there is no common
+		// base, so the globs are read relative to root as before.
+		return append([]string(nil), c.Exclude...)
+	}
+	prefix := strings.Split(rel, "/")
+	var out []string
+	for _, glob := range c.Exclude {
+		if g, ok := rebase(strings.TrimSuffix(filepath.ToSlash(glob), "/"), prefix); ok {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+func rebase(glob string, prefix []string) (string, bool) {
+	segments := strings.Split(glob, "/")
+	for i, seg := range segments {
+		if seg == "**" {
+			return strings.Join(segments[i:], "/"), true
+		}
+		if i == len(prefix) {
+			return strings.Join(segments[i:], "/"), true
+		}
+		if matched, err := doublestar.Match(seg, prefix[i]); err != nil || !matched {
+			return "", false
+		}
+	}
+	// The glob names root itself or one of its parents, so the whole scan is
+	// under an excluded directory.
+	return "**", true
 }
 
 func (c *Config) validate() error {
