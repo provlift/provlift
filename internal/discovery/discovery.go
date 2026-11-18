@@ -46,6 +46,10 @@ type Options struct {
 	// resolves the same source against registry.opentofu.org, and its lock
 	// files record that host.
 	RegistryHost string
+
+	// OpenTofu prefers .opentofu-version over .terraform-version when both
+	// sit in the same directory. Otherwise .terraform-version wins.
+	OpenTofu bool
 }
 
 // Scan walks Options.Root and returns the provider inventory.
@@ -107,6 +111,7 @@ func Scan(opts Options) (*model.Inventory, error) {
 
 	for dir, mod := range byDir {
 		mod.IsRoot = !childRefs[dir]
+		mod.VersionFile, mod.VersionFilePath = findVersionFile(root, dir, opts.OpenTofu)
 	}
 
 	sort.Slice(inv.Modules, func(i, j int) bool {

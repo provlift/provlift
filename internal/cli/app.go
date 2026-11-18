@@ -112,6 +112,7 @@ func (g *globalOptions) open() (*workspace, error) {
 		Root:         root,
 		ExcludeGlobs: excludes,
 		RegistryHost: model.DefaultRegistryHost(cfg.Terraform.Binary),
+		OpenTofu:     model.DefaultRegistryHost(cfg.Terraform.Binary) == model.OpenTofuRegistryHost,
 	})
 	if err != nil {
 		return nil, err

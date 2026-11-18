@@ -63,12 +63,35 @@ modules/network  child  aws     hashicorp/aws        ~> 5.0         -        ver
 | `--provider` | all | Only show these providers (repeatable) |
 | `--roots-only` | `false` | Only show root modules |
 | `--show-ignored` | `false` | Include providers excluded by configuration |
+| `--core` | `false` | Show each module's Terraform/OpenTofu version instead of its providers |
+
+**Terraform/OpenTofu version (`--core`)**
+
+`--core` replaces the provider table with one row per module: the
+`required_version` it declares and the version named by the nearest
+`.terraform-version` (tfenv, tenv) or `.opentofu-version` (tofuenv, tenv) at or
+above the module. The search stops at `--dir`. The nearest directory wins; when
+one directory holds both files, the configured binary decides:
+`.opentofu-version` for `tofu`, `.terraform-version` otherwise. The file's first
+line that is neither blank nor a `#` comment is used.
+
+```
+MODULE           KIND   REQUIRED_VERSION  VERSION FILE
+envs/dev         root   >= 1.5.0          1.5.7 (.terraform-version)
+envs/prod        root   >= 1.6.0          1.5.7 (.terraform-version)
+modules/network  child  -                 1.5.7 (.terraform-version)
+```
+
+`list --json` always includes this as `modules`, next to `providers`.
 
 **Examples**
 
 ```powershell
 # Everything in the repository
 provlift list
+
+# Terraform/OpenTofu versions: required_version and version files
+provlift list --core
 
 # One provider, root modules only
 provlift list --provider aws --roots-only
@@ -146,13 +169,18 @@ provlift check --json
 Compares modules against each other rather than against a registry. Entirely
 offline: no network, no credentials.
 
-It reports three kinds of inconsistency:
+It reports four kinds of inconsistency:
 
 | Finding | Meaning |
 |---|---|
 | **Version skew** | The same provider is locked at different versions in different modules |
 | **Constraint divergence** | The same provider is constrained differently in different modules |
 | **Unpinned root modules** | A root module records no `.terraform.lock.hcl`, so nothing fixes what it installs |
+| **Core version mismatch** | A module's `.terraform-version` or `.opentofu-version` (found as in [`list --core`](#62-provlift-list)) names a version its `required_version` rejects, so `init` fails with the pinned binary |
+
+A version file that does not hold a concrete version (tfenv's `latest` or
+`min-required`, for example) is not compared. The core check is about the
+Terraform/OpenTofu binary, not a provider, so `--provider` turns it off.
 
 Only **root** modules are reported as unpinned. A shared module deliberately
 has no lock file and is never flagged — see
@@ -171,7 +199,7 @@ the configuration reveals that.
 | `--module` | all | Only analyse these module paths (repeatable, glob), as in `check` |
 | `--roots-only` | `false` | Only analyse root modules |
 | `--show-ignored` | `false` | Include providers excluded by `providers.ignore` |
-| `--fail-on` | `skew,divergence,unpinned` | Finding kinds that make `--exit-code` fail |
+| `--fail-on` | `skew,divergence,unpinned,core` | Finding kinds that make `--exit-code` fail |
 | `--exit-code` | `false` | Exit `2` when findings of a `--fail-on` kind are found |
 
 Like `list` and `check`, `drift` leaves out providers in `providers.ignore`

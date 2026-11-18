@@ -406,8 +406,8 @@ func TestNormalizeConstraintComparesMeaning(t *testing.T) {
 
 func TestParseKinds(t *testing.T) {
 	all, err := ParseKinds(nil)
-	if err != nil || len(all) != 3 {
-		t.Fatalf("ParseKinds(nil) = %v, %v; want all three kinds", all, err)
+	if err != nil || len(all) != len(Kinds) || !all[KindCore] {
+		t.Fatalf("ParseKinds(nil) = %v, %v; want every kind", all, err)
 	}
 	got, err := ParseKinds([]string{"Skew", " unpinned "})
 	if err != nil || !got[KindSkew] || !got[KindUnpinned] || got[KindDivergence] {
@@ -425,5 +425,61 @@ func TestHasFindingsOf(t *testing.T) {
 	}
 	if !r.HasFindingsOf(map[string]bool{KindDivergence: true}) {
 		t.Error("divergence should count for divergence")
+	}
+}
+
+func coreInventory(required, pinned string) *model.Inventory {
+	return &model.Inventory{Root: "/repo", Modules: []*model.Module{{
+		Dir: "/repo/envs/dev", RelDir: "envs/dev", IsRoot: true,
+		RequiredVersion: required,
+		VersionFile:     pinned,
+		VersionFilePath: ".terraform-version",
+	}}}
+}
+
+func TestCoreVersionMismatch(t *testing.T) {
+	for _, tc := range []struct {
+		name, required, pinned string
+		want                   bool
+	}{
+		{"pinned below floor", ">= 1.6.0", "1.5.7", true},
+		{"pinned outside pessimistic range", "~> 1.5.0", "1.6.1", true},
+		{"pinned inside range", ">= 1.5.0, < 2.0.0", "1.9.8", false},
+		{"v prefix", ">= 1.6.0", "v1.5.7", true},
+		{"non-concrete version file", ">= 1.6.0", "latest:^1.5", false},
+		{"no required_version", "", "1.5.7", false},
+		{"no version file", ">= 1.6.0", "", false},
+		{"unparsable constraint", "~~ 1", "1.5.7", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Analyze(coreInventory(tc.required, tc.pinned), Options{})
+			if got := len(r.Core) == 1; got != tc.want {
+				t.Fatalf("core findings = %+v, want mismatch=%t", r.Core, tc.want)
+			}
+			if !tc.want {
+				return
+			}
+			c := r.Core[0]
+			if c.Module != "envs/dev" || c.RequiredVersion != tc.required ||
+				c.Version != tc.pinned || c.VersionFile != ".terraform-version" {
+				t.Errorf("finding = %+v", c)
+			}
+			if !r.HasFindingsOf(map[string]bool{KindCore: true}) || r.HasFindingsOf(map[string]bool{KindSkew: true}) {
+				t.Error("a core mismatch must count for core only")
+			}
+			if r.Count() != 1 {
+				t.Errorf("Count() = %d, want 1", r.Count())
+			}
+		})
+	}
+}
+
+func TestCoreVersionMismatchRespectsFilters(t *testing.T) {
+	inv := coreInventory(">= 1.6.0", "1.5.7")
+	if r := Analyze(inv, Options{Selectors: []string{"aws"}}); len(r.Core) != 0 {
+		t.Errorf("a --provider selection must turn off the core check, got %+v", r.Core)
+	}
+	if r := Analyze(inv, Options{Module: func(*model.Module) bool { return false }}); len(r.Core) != 0 {
+		t.Errorf("a module filter must apply to the core check, got %+v", r.Core)
 	}
 }

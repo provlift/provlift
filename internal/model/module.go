@@ -86,6 +86,13 @@ type Module struct {
 
 	RequiredVersion string `json:"required_terraform_version,omitempty"`
 
+	// VersionFile is the core version named by the nearest .terraform-version
+	// or .opentofu-version at or above Dir (within the scanned root), as
+	// written. VersionFilePath is that file, relative to the scanned root.
+	// Both are empty when no version file applies.
+	VersionFile     string `json:"-"`
+	VersionFilePath string `json:"-"`
+
 	Requirements []ProviderRequirement `json:"providers"`
 
 	HasLockFile  bool                    `json:"has_lock_file"`

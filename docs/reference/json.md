@@ -56,6 +56,22 @@ Reports all declared provider requirements across all discovered modules in the 
       "ignored": false
     }
   ],
+  "modules": [
+    {
+      "module": ".",
+      "is_root": true,
+      "required_version": ">= 1.5.0",
+      "version_file": "1.5.7",
+      "version_file_path": ".terraform-version"
+    },
+    {
+      "module": "modules/network",
+      "is_root": false,
+      "required_version": "",
+      "version_file": "1.5.7",
+      "version_file_path": ".terraform-version"
+    }
+  ],
   "root": "/home/user/infrastructure"
 }
 ```
@@ -74,6 +90,12 @@ Reports all declared provider requirements across all discovered modules in the 
 | `providers[].locked` | `string` | Currently locked version recorded in `.terraform.lock.hcl`, or empty string if unlocked | Required |
 | `providers[].declared_at` | `string` | File and line of the declaration (`<file>:<line>`) | Required |
 | `providers[].ignored` | `boolean` | `true` if the provider matches `providers.ignore` in repository policy | Required |
+| `modules` | `array` | Every discovered module (root modules only with `--roots-only`) and its Terraform/OpenTofu version; `[]` if none | Required |
+| `modules[].module` | `string` | Module directory relative to repository root (`.` for root) | Required |
+| `modules[].is_root` | `boolean` | As in `providers[].is_root` | Required |
+| `modules[].required_version` | `string` | The module's `required_version`, or empty string if it declares none | Required |
+| `modules[].version_file` | `string` | The version named by the nearest `.terraform-version` or `.opentofu-version` at or above the module (within the scanned root), as written; empty string if none applies | Required |
+| `modules[].version_file_path` | `string` | That version file, relative to the repository root; empty string if none applies | Required |
 | `diagnostics` | `array` | Non-fatal scan diagnostics (`severity`, `summary`, `detail`, `position`), or `null` when none | Required / Nullable |
 
 ---
@@ -220,6 +242,14 @@ Reports cross-module inconsistencies across version locks, constraints, and unpi
           "hashicorp/azurerm"
         ]
       }
+    ],
+    "core_version_mismatch": [
+      {
+        "module": "envs/prod",
+        "required_version": ">= 1.6.0",
+        "version": "1.5.7",
+        "version_file": ".terraform-version"
+      }
     ]
   },
   "root": "/home/user/infrastructure"
@@ -244,6 +274,11 @@ Reports cross-module inconsistencies across version locks, constraints, and unpi
 | `findings.unpinned_modules` | `array` | Root modules with declared providers but no `.terraform.lock.hcl` (`null` if none) | Required / Nullable |
 | `findings.unpinned_modules[].module` | `string` | Relative module path | Required |
 | `findings.unpinned_modules[].providers` | `array` | Display addresses of providers declared in the unpinned root (`[]string`) | Required |
+| `findings.core_version_mismatch` | `array` | Modules whose version file names a version their `required_version` rejects (`null` if none, and always `null` with `--provider`) | Required / Nullable |
+| `findings.core_version_mismatch[].module` | `string` | Relative module path | Required |
+| `findings.core_version_mismatch[].required_version` | `string` | The module's `required_version` | Required |
+| `findings.core_version_mismatch[].version` | `string` | The version named by the version file, as written | Required |
+| `findings.core_version_mismatch[].version_file` | `string` | The version file, relative to the repository root | Required |
 | `count` | `integer` | Total number of drift findings | Required |
 | `diagnostics` | `array` | Non-fatal scan diagnostics, or `null` when none | Required / Nullable |
 

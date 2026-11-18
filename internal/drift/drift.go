@@ -57,21 +57,32 @@ type Unpinned struct {
 	Providers []string `json:"providers"`
 }
 
+// CoreMismatch is a module whose version file (.terraform-version or
+// .opentofu-version) names a core version that its required_version does
+// not admit, so `terraform init` fails for whoever uses the pinned binary.
+type CoreMismatch struct {
+	Module          string `json:"module"`
+	RequiredVersion string `json:"required_version"`
+	Version         string `json:"version"`
+	VersionFile     string `json:"version_file"`
+}
+
 // Report is the result of an analysis.
 type Report struct {
 	Skew       []VersionSkew          `json:"version_skew"`
 	Divergence []ConstraintDivergence `json:"constraint_divergence"`
 	Unpinned   []Unpinned             `json:"unpinned_modules"`
+	Core       []CoreMismatch         `json:"core_version_mismatch"`
 }
 
 // HasFindings reports whether anything at all was found.
 func (r *Report) HasFindings() bool {
-	return len(r.Skew) > 0 || len(r.Divergence) > 0 || len(r.Unpinned) > 0
+	return r.Count() > 0
 }
 
 // Count returns the total number of findings.
 func (r *Report) Count() int {
-	return len(r.Skew) + len(r.Divergence) + len(r.Unpinned)
+	return len(r.Skew) + len(r.Divergence) + len(r.Unpinned) + len(r.Core)
 }
 
 // Finding kinds, as named by --fail-on.
@@ -79,10 +90,11 @@ const (
 	KindSkew       = "skew"
 	KindDivergence = "divergence"
 	KindUnpinned   = "unpinned"
+	KindCore       = "core"
 )
 
 // Kinds lists every finding kind, in report order.
-var Kinds = []string{KindSkew, KindDivergence, KindUnpinned}
+var Kinds = []string{KindSkew, KindDivergence, KindUnpinned, KindCore}
 
 // ParseKinds reads a list of finding kinds. An empty list means all of them.
 func ParseKinds(names []string) (map[string]bool, error) {
@@ -90,7 +102,7 @@ func ParseKinds(names []string) (map[string]bool, error) {
 	for _, name := range names {
 		name = strings.ToLower(strings.TrimSpace(name))
 		switch name {
-		case KindSkew, KindDivergence, KindUnpinned:
+		case KindSkew, KindDivergence, KindUnpinned, KindCore:
 			kinds[name] = true
 		default:
 			return nil, fmt.Errorf("unknown finding kind %q (want %s)", name, strings.Join(Kinds, ", "))
@@ -108,7 +120,8 @@ func ParseKinds(names []string) (map[string]bool, error) {
 func (r *Report) HasFindingsOf(kinds map[string]bool) bool {
 	return (kinds[KindSkew] && len(r.Skew) > 0) ||
 		(kinds[KindDivergence] && len(r.Divergence) > 0) ||
-		(kinds[KindUnpinned] && len(r.Unpinned) > 0)
+		(kinds[KindUnpinned] && len(r.Unpinned) > 0) ||
+		(kinds[KindCore] && len(r.Core) > 0)
 }
 
 // Options controls which checks run.
@@ -139,7 +152,46 @@ func Analyze(inv *model.Inventory, opts Options) *Report {
 		Skew:       findVersionSkew(inv, opts),
 		Divergence: findConstraintDivergence(inv, opts),
 		Unpinned:   findUnpinned(inv, opts),
+		Core:       findCoreMismatch(inv, opts),
 	}
+}
+
+// findCoreMismatch reports modules whose version file names a version their
+// required_version rejects. A version file that does not hold a concrete
+// version (tfenv's "latest" or "min-required", for example) or a constraint
+// that does not parse is skipped rather than guessed at. The check is about
+// the core binary, not a provider, so a --provider selection turns it off.
+func findCoreMismatch(inv *model.Inventory, opts Options) []CoreMismatch {
+	if len(opts.Selectors) > 0 {
+		return nil
+	}
+
+	var out []CoreMismatch
+	for _, mod := range inv.Modules {
+		if mod.RequiredVersion == "" || mod.VersionFile == "" || !opts.module(mod) {
+			continue
+		}
+		v, err := version.NewVersion(mod.VersionFile)
+		if err != nil {
+			continue
+		}
+		c, err := version.NewConstraint(mod.RequiredVersion)
+		if err != nil {
+			continue
+		}
+		if c.Check(v) {
+			continue
+		}
+		out = append(out, CoreMismatch{
+			Module:          mod.RelDir,
+			RequiredVersion: mod.RequiredVersion,
+			Version:         mod.VersionFile,
+			VersionFile:     mod.VersionFilePath,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Module < out[j].Module })
+	return out
 }
 
 func matches(addr model.Address, selectors []string) bool {

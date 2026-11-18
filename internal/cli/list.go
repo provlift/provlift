@@ -19,6 +19,7 @@ func newListCommand(g *globalOptions) *cobra.Command {
 		selectors  []string
 		rootsOnly  bool
 		showHidden bool
+		core       bool
 	)
 
 	cmd := &cobra.Command{
@@ -29,7 +30,19 @@ requirement: its local name, fully qualified source, version constraint, the
 version currently recorded in .terraform.lock.hcl, and the file and line the
 constraint is declared on.
 
+--core lists each module's Terraform/OpenTofu version instead: the
+required_version it declares and the version named by the nearest
+.terraform-version or .opentofu-version (at or above the module, within
+--dir). When one directory holds both files, the configured binary decides:
+.opentofu-version for tofu, .terraform-version otherwise. The JSON output
+always carries this as "modules".
+
 This command is entirely offline; it never contacts a registry.`,
+		Example: `  # Providers in every module
+  provlift list
+
+  # Terraform/OpenTofu versions: required_version and version files
+  provlift list --core`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ws, err := g.open()
@@ -87,12 +100,60 @@ This command is entirely offline; it never contacts a registry.`,
 				}
 			}
 
+			type coreRow struct {
+				Module          string `json:"module"`
+				IsRoot          bool   `json:"is_root"`
+				RequiredVersion string `json:"required_version"`
+				VersionFile     string `json:"version_file"`
+				VersionFilePath string `json:"version_file_path"`
+			}
+			coreRows := []coreRow{}
+			for _, mod := range ws.inv.Modules {
+				if rootsOnly && !mod.IsRoot {
+					continue
+				}
+				coreRows = append(coreRows, coreRow{
+					Module:          mod.RelDir,
+					IsRoot:          mod.IsRoot,
+					RequiredVersion: mod.RequiredVersion,
+					VersionFile:     mod.VersionFile,
+					VersionFilePath: mod.VersionFilePath,
+				})
+			}
+
 			if g.jsonOut {
 				return writeJSON(g, map[string]any{
 					"root":        ws.inv.Root,
 					"providers":   rows,
+					"modules":     coreRows,
 					"diagnostics": ws.inv.Diagnostics,
 				})
+			}
+
+			if core {
+				if len(coreRows) == 0 {
+					fmt.Fprintln(g.stdout(), "No Terraform modules found.")
+					printDiagnostics(g, ws)
+					return nil
+				}
+				table := make([][]string, 0, len(coreRows))
+				for _, r := range coreRows {
+					kind := "child"
+					if r.IsRoot {
+						kind = "root"
+					}
+					file := r.VersionFile
+					if file != "" {
+						file = fmt.Sprintf("%s (%s)", r.VersionFile, r.VersionFilePath)
+					}
+					table = append(table, []string{r.Module, kind, r.RequiredVersion, file})
+				}
+				if err := report.Table(g.stdout(),
+					[]string{"MODULE", "KIND", "REQUIRED_VERSION", "VERSION FILE"}, table); err != nil {
+					return exitWith(ExitError, err)
+				}
+				printDiagnostics(g, ws)
+				return nil
 			}
 
 			if len(rows) == 0 {
@@ -130,6 +191,7 @@ This command is entirely offline; it never contacts a registry.`,
 	f.StringSliceVar(&selectors, "provider", nil, "only show these providers (repeatable)")
 	f.BoolVar(&rootsOnly, "roots-only", false, "only show root modules")
 	f.BoolVar(&showHidden, "show-ignored", false, "include providers excluded by configuration")
+	f.BoolVar(&core, "core", false, "list each module's required_version and version file instead of providers")
 	return cmd
 }
 

@@ -25,11 +25,13 @@ func newDriftCommand(g *globalOptions) *cobra.Command {
 		Use:   "drift",
 		Short: "Find provider inconsistencies between modules",
 		Long: `Compares modules against each other rather than against a registry, and
-reports three kinds of inconsistency:
+reports four kinds of inconsistency:
 
   Version skew           the same provider locked at different versions
   Constraint divergence  the same provider constrained differently
   Unpinned modules       root modules that record no dependency lock file
+  Core version mismatch  a .terraform-version or .opentofu-version naming a
+                         version the module's required_version rejects
 
 Version skew is the one that usually matters. Two environments sharing the
 same configuration and the same constraint can still be running different
@@ -101,7 +103,7 @@ credentials.`,
 	f.StringSliceVar(&modules, "module", nil, "only analyse these module paths (repeatable, glob)")
 	f.BoolVar(&rootsOnly, "roots-only", false, "only analyse root modules")
 	f.BoolVar(&showIgnored, "show-ignored", false, "include providers excluded by configuration")
-	f.StringSliceVar(&failOn, "fail-on", nil, "finding kinds that make --exit-code fail: skew, divergence, unpinned (default all)")
+	f.StringSliceVar(&failOn, "fail-on", nil, "finding kinds that make --exit-code fail: skew, divergence, unpinned, core (default all)")
 	f.BoolVar(&exitCode, "exit-code", false, "exit 2 when inconsistencies are found, for CI gating")
 	return cmd
 }
@@ -175,6 +177,19 @@ func printDrift(g *globalOptions, result *drift.Report) {
 			rows = append(rows, []string{u.Module, strings.Join(u.Providers, ", ")})
 		}
 		_ = report.Table(out, []string{"MODULE", "PROVIDERS"}, rows)
+	}
+
+	if len(result.Core) > 0 {
+		report.Section(out, "Core version mismatch")
+		fmt.Fprintln(out, "Each module below has a version file naming a Terraform/OpenTofu version")
+		fmt.Fprintln(out, "that its required_version does not admit, so init fails with that binary.")
+		fmt.Fprintln(out)
+
+		rows := make([][]string, 0, len(result.Core))
+		for _, c := range result.Core {
+			rows = append(rows, []string{c.Module, c.RequiredVersion, c.Version, c.VersionFile})
+		}
+		_ = report.Table(out, []string{"MODULE", "REQUIRED_VERSION", "VERSION", "VERSION FILE"}, rows)
 	}
 
 	fmt.Fprintf(out, "\n%d finding(s).\n", result.Count())
