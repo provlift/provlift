@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/provlift/provlift/compare/v0.4.0...v0.5.0) (2026-11-19)
+
+
+### Features
+
+* report required_version and .terraform-version/.opentofu-version ([#116](https://github.com/provlift/provlift/issues/116)) ([f9e05cc](https://github.com/provlift/provlift/commit/f9e05ccbd9caf5ecd99c90483fdec4a0b974b7d6))
+
+
+### Bug Fixes
+
+* **config:** find .provlift.yaml above the scanned directory ([#115](https://github.com/provlift/provlift/issues/115)) ([06fff67](https://github.com/provlift/provlift/commit/06fff67190b918c6afd6bc92d70d36eea7af679c))
+
 ## [0.4.0](https://github.com/provlift/provlift/compare/v0.3.1...v0.4.0) (2026-11-17)
 
 
