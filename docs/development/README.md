@@ -54,13 +54,18 @@ pull request:
 | Job | Gate |
 |---|---|
 | Format and vet | `gofmt`, `go mod tidy`, `go vet`, `golangci-lint` (pinned version, [.golangci.yml](../../.golangci.yml)) |
-| Go unit and package tests | `go test -race ./...`, coverage ≥ 80% and uploaded coverage report |
+| Go unit and package tests | On Ubuntu, `windows-latest` and `macos-latest`. Ubuntu runs `go test -race ./...`, the coverage ≥ 80% gate and uploads the coverage report; Windows and macOS run `go test ./...`, and the Windows job fails if the `examples/workflows` tests skip |
 | Cross-compile | linux and darwin on amd64 and arm64; windows on amd64 |
 | Lint workflows | `actionlint` over `.github/workflows` *and* `examples/workflows` |
 | End to end | A real upgrade against the real registry and real Terraform |
 | End to end against OpenTofu | The same upgrade with real `tofu`; the lock file must record `registry.opentofu.org` |
 
-The race detector runs on every commit because CGO is free on Linux runners.
+The race detector runs on every commit because CGO is free on Linux runners. It
+and the coverage gate stay on Ubuntu: `-race` needs cgo and a C toolchain on
+Windows. The Windows and macOS legs exist for the paths that behave differently
+there, such as the `%APPDATA%` credential files, the atomic file replacement in
+`internal/hcledit` and `.exe` handling. The Ubuntu leg keeps the job name
+"Go unit and package tests" so the required status check on `main` still matches.
 
 The end-to-end job exists because the unit tests use a fake registry and a fake
 Terraform, which means they cannot catch a change in either. It upgrades a

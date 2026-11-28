@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -203,6 +204,21 @@ func newBashHarness(t *testing.T) *scriptHarness {
 	}
 }
 
+// requireBash4 skips the test when bash is older than version 4. The workflows
+// run on ubuntu-latest, and some steps use Bash 4 syntax such as ${var,,};
+// macOS ships Bash 3.2.
+func (h *scriptHarness) requireBash4(t *testing.T) {
+	t.Helper()
+	out, err := exec.Command(h.bash, "-c", "echo ${BASH_VERSINFO[0]}").Output()
+	if err != nil {
+		t.Fatalf("reading the Bash version: %v", err)
+	}
+	version := strings.TrimSpace(string(out))
+	if major, err := strconv.Atoi(version); err != nil || major < 4 {
+		t.Skipf("the workflow step uses Bash 4 syntax, but %s is Bash %s", h.bash, version)
+	}
+}
+
 // run executes the literal workflow script. GitHub expressions are never
 // substituted into shell text; values reach scripts solely through step env.
 func (h *scriptHarness) run(t *testing.T, step workflowStep, values map[string]string) (string, error) {
@@ -360,6 +376,9 @@ func TestDiscoverySkipLogCannotInjectWorkflowCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discovery failed: %v\n%s", err, output)
 	}
+	// jq for Windows ends each line it prints with CRLF. Only a carriage return
+	// outside a line ending would be an injected one.
+	output = strings.ReplaceAll(output, "\r\n", "\n")
 	const want = "skipped @team ::warning::MODULE @source ::error::SOURCE: @user blocked ::group::REASON"
 	if !strings.Contains(output, want) || strings.Contains(output, "\n::") || strings.Contains(output, "\r") || strings.Count(output, "skipped ") != 1 {
 		t.Fatalf("repository-controlled skip values must stay on one log line:\n%s", output)
@@ -1007,6 +1026,7 @@ func TestCompatibilityResolvesProvider(t *testing.T) {
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			harness := newScriptHarness(t)
+			harness.requireBash4(t)
 			if err := os.WriteFile(filepath.Join(harness.dir, "check.json"), []byte(scenario.check), 0o600); err != nil {
 				t.Fatal(err)
 			}

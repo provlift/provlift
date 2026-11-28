@@ -95,11 +95,18 @@ jobs:
           version: v2.15.0
 
   unit-tests:
-    name: Go unit and package tests
+    # The Ubuntu leg keeps the original job name, which the Protect main ruleset
+    # requires as a status check. The other legs are named after their runner.
+    name: ${{ matrix.os == 'ubuntu-latest' && 'Go unit and package tests' || format('Go unit tests ({0})', matrix.os) }}
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.go != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      # Let every platform report, so one failure does not hide another.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -111,11 +118,36 @@ jobs:
       # CGO is free on Linux runners, so there is no reason not to run the
       # race detector on every commit.
       - name: Run tests with race detection and coverage
+        if: runner.os == 'Linux'
         env:
           CGO_ENABLED: 1
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
+      # Users run the tool on Windows and macOS, where some paths differ
+      # (credential files, atomic file replacement, .exe names). -race needs a
+      # C toolchain on Windows, so the race detector and the coverage gate stay
+      # on Linux.
+      - name: Run tests
+        if: runner.os != 'Linux'
+        run: go test ./...
+
+      # The workflow shell tests skip, rather than fail, when Bash or jq is
+      # missing. On Windows they run under Git Bash with jq, so fail here if
+      # they skip and the coverage cannot disappear unnoticed. macOS is left
+      # out: it ships Bash 3.2, and the one test whose step uses Bash 4 syntax
+      # skips there by design.
+      - name: Check that the workflow tests ran
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          go test -count=1 -v ./examples/workflows | tee "$RUNNER_TEMP/workflows.log"
+          if grep -q -- '--- SKIP' "$RUNNER_TEMP/workflows.log"; then
+            echo "::error::the workflow tests were skipped on ${RUNNER_OS}"
+            exit 1
+          fi
+
       - name: Report coverage
+        if: runner.os == 'Linux'
         run: |
           go tool cover -func=coverage.out | tail -n 1
           total=$(go tool cover -func=coverage.out | awk 'END {print substr($3, 1, length($3)-1)}')
@@ -128,7 +160,7 @@ jobs:
           }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
+        if: always() && runner.os == 'Linux'
         with:
           name: coverage
           path: coverage.out

@@ -59,8 +59,8 @@ go test -race ./...   # -race needs cgo; plain go test ./... is fine locally
 [.github/workflows/ci.yml](.github/workflows/ci.yml) so your result matches CI;
 see the [installation guide](https://golangci-lint.run/docs/welcome/install/).
 
-CI additionally enforces at least 80% test coverage, cross-compiles for Linux,
-macOS and Windows, lints the GitHub Actions workflows with `actionlint`, and runs
+CI additionally enforces at least 80% test coverage, runs the unit tests on Linux,
+macOS and Windows, cross-compiles for all of them, lints the GitHub Actions workflows with `actionlint`, and runs
 an end-to-end upgrade against the real Terraform registry. See
 [docs/development](docs/development/README.md) for details of the test strategy.
 
